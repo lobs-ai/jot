@@ -49,7 +49,7 @@ function askQuestion(prompt: string): Promise<string> {
 async function cmdAdd(args: string[]): Promise<void> {
   const content = args.join(' ');
   if (!content.trim()) {
-    console.error('Usage: jot add "your note here"');
+    console.error('Usage: jot note "your note here"');
     process.exit(1);
   }
 
@@ -234,7 +234,7 @@ async function cmdList(args: string[]): Promise<void> {
   const allNotes = db.getAllNotes(filters);
   
   if (allNotes.length === 0) {
-    console.log('No notes yet. Add your first note with jot add "your thought"');
+    console.log('No notes yet. Add your first note with jot note "your thought"');
     return;
   }
 

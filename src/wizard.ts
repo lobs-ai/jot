@@ -97,7 +97,7 @@ async function askAnalysisOptions(): Promise<{
 async function askCompletion(): Promise<void> {
   console.log('\n=== Setup Complete! ===\n');
   console.log('Quick start:');
-  console.log('  jot add "my first note"           Add a note');
+  console.log('  jot note "my first note"          Add a note');
   console.log('  jot list                          See all notes');
   console.log('  jot search "keyword"             Search notes');
   console.log('  jot insights                      Get AI-powered insights\n');
