@@ -1,6 +1,6 @@
-import { openDB, Note } from './db.js';
+import { openDB, type Note } from './db.js';
 import { getActiveBackend } from './config.js';
-import { getContextPrompt, updateContextFromNote, readContext } from './context.js';
+import { getContextPrompt, updateContextFromNote } from './context.js';
 import { getJotPersonaPrompt } from './prompting.js';
 
 export interface UserPatch {
@@ -181,13 +181,12 @@ export async function runProcessCycle(): Promise<{
 }> {
   const db = openDB();
   const allNotes = db.getAllNotes();
-  const context = readContext();
   
   const unanalyzed = allNotes.filter(n => !n.analyzed);
   let processed = 0;
-  let actionItemsFound: string[] = [];
-  let urgentItems: string[] = [];
-  let staleNotes: string[] = [];
+  const actionItemsFound: string[] = [];
+  const urgentItems: string[] = [];
+  const staleNotes: string[] = [];
 
   for (const note of unanalyzed) {
     const result = await analyzeNoteWithLocalModel(note, allNotes);

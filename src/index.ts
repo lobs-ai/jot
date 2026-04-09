@@ -1,16 +1,14 @@
-#!/usr/bin/env node
 import { openDB, Note } from './db.js';
-import { runAnalysisCycle, runProcessCycle } from './analyzer.js';
+import { runAnalysisCycle } from './analyzer.js';
 import { loadConfig, getConfigPath, saveConfig } from './config.js';
 import { generateInsights, getStoredInsights, formatInsights } from './insights.js';
 import { runSetupWizard } from './wizard.js';
-import { userFileExists, createUserFile, readUserFile, readContext, getContextPrompt, migrateUserMd } from './context.js';
-import { createNotifier, shouldNotify } from './notifier.js';
+import { readUserFile, readContext, getContextPrompt, migrateUserMd } from './context.js';
 import { runAgentCycle, notifyIfNeeded } from './agent.js';
-import { setupGoogleCredentials, enableGoogleService, fetchGmailEmails, fetchCalendarEvents, createCalendarEvent, authenticateGoogle, getGoogleStatus, GmailEmail, CalendarEvent } from './google.js';
+import { setupGoogleCredentials, enableGoogleService, fetchGmailEmails, fetchCalendarEvents, authenticateGoogle, getGoogleStatus, GmailEmail, CalendarEvent } from './google.js';
 import { insertTodo, getTodos, updateTodo, completeTodo, uncompleteTodo, deleteTodo, formatTodoList, Todo } from './todos.js';
-import { getJotPersonaPrompt, getAskSystemPrompt } from './prompting.js';
-import { loadSession, getRecentMessages, buildSessionContext, appendToSession, callModelWithSession, saveSession, markSurfaced, loadGlobalSurfaced, saveGlobalSurfaced, clearGlobalSurfaced, clearStaleProject, MAX_HISTORY } from './sessions.js';
+import { getAskSystemPrompt } from './prompting.js';
+import { loadSession, buildSessionContext, appendToSession, callModelWithSession, saveSession, markSurfaced, loadGlobalSurfaced, saveGlobalSurfaced, clearGlobalSurfaced } from './sessions.js';
 import * as readline from 'readline';
 import * as child_process from 'child_process';
 import fs from 'fs';
@@ -666,7 +664,6 @@ async function cmdAsk(args: string[]): Promise<void> {
   }
 
   const session = loadSession(sessionName);
-  const recentMessages = getRecentMessages(session, MAX_HISTORY);
 
   const relevantNotes = db.searchNotes(question).filter(note => !isPlaceholderText(note.content)).slice(0, 8);
   const recentNotes = db.getAllNotes().filter(note => !isPlaceholderText(note.content)).slice(0, 8);
@@ -970,8 +967,8 @@ async function cmdExport(args: string[]): Promise<void> {
       console.log(`## [${note.id.slice(0, 8)}] ${new Date(note.created_at).toLocaleString()}`);
       if (note.archived) console.log('*Archived*');
       console.log(note.content);
-      if (note.tags.length > 0) console.log(`\nTags: ${note.tags.map(t => '#' + t).join(' ')}`);
-      if (note.action_items.length > 0) console.log(`\nAction items:\n${note.action_items.map(a => '- [ ] ' + a).join('\n')}`);
+      if (note.tags.length > 0) console.log(`\nTags: ${note.tags.map((t: string) => '#' + t).join(' ')}`);
+      if (note.action_items.length > 0) console.log(`\nAction items:\n${note.action_items.map((a: string) => '- [ ] ' + a).join('\n')}`);
       console.log('\n---\n');
     });
   }
@@ -1137,72 +1134,6 @@ async function cmdContext(args: string[]): Promise<void> {
   console.error('Usage: jot context [user|gmail|calendar]');
   console.error('       jot context gmail --days 3');
   console.error('       jot context calendar --week');
-  process.exit(1);
-}
-
-async function cmdCalendar(args: string[]): Promise<void> {
-  const subcmd = args[0];
-
-  if (subcmd === 'add') {
-    const title = args.slice(1).filter(a => !a.startsWith('--')).join(' ');
-    if (!title) {
-      console.error('Usage: jot calendar add "Event title" --when "tomorrow 3pm" [--end "tomorrow 4pm"] [--location "Room 101"]');
-      process.exit(1);
-    }
-
-    const whenValue = extractFlag(args, '--when');
-    if (!whenValue) {
-      console.error('Usage: jot calendar add "Event title" --when "tomorrow 3pm" [--end "tomorrow 4pm"]');
-      process.exit(1);
-    }
-
-    const startDate = new Date(whenValue);
-    if (Number.isNaN(startDate.getTime())) {
-      console.error(`Could not parse date: "${whenValue}". Use a format like "2026-04-15 14:00" or "tomorrow 3pm".`);
-      process.exit(1);
-    }
-
-    const endValue = extractFlag(args, '--end');
-    const endDate = endValue ? new Date(endValue) : undefined;
-    if (endValue && Number.isNaN(endDate!.getTime())) {
-      console.error(`Could not parse end date: "${endValue}".`);
-      process.exit(1);
-    }
-
-    const location = extractFlag(args, '--location');
-
-    const confirmed = extractFlag(args, '--confirm');
-    if (!confirmed) {
-      const startStr = startDate.toLocaleString(undefined, {
-        weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
-      });
-      const endStr = endDate
-        ? endDate.toLocaleString(undefined, { hour: 'numeric', minute: '2-digit' })
-        : '(1 hour)';
-      console.log(`About to create:`);
-      console.log(`  Title: ${title}`);
-      console.log(`  Start: ${startStr}`);
-      console.log(`  End: ${endStr}`);
-      if (location) console.log(`  Location: ${location}`);
-      const answer = await askQuestion('\nCreate this event? [y/N]: ');
-      if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
-        console.log('Cancelled.');
-        return;
-      }
-    }
-
-    const created = await createCalendarEvent({
-      summary: title,
-      start: startDate.toISOString(),
-      end: endDate ? endDate.toISOString() : undefined,
-      location: location ?? undefined
-    });
-
-    console.log(`Created: ${created.summary} (${created.start})`);
-    return;
-  }
-
-  console.error('Usage: jot calendar add "Event title" --when "tomorrow 3pm" [--end "2026-04-15 15:00"] [--location "Room 101"]');
   process.exit(1);
 }
 

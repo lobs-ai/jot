@@ -1,4 +1,4 @@
-import { openDB } from './db.js';
+import { openDB as _db } from './db.js';
 import { runAnalysisCycle } from './analyzer.js';
 import { loadConfig } from './config.js';
 import { readContext, updateContextFromNote } from './context.js';
@@ -23,16 +23,6 @@ function log(message: string): void {
   fs.appendFileSync(logFile, `[${timestamp}] ${message}\n`);
 }
 
-function getLastSync(): Date | null {
-  if (!fs.existsSync(LAST_SYNC_FILE)) return null;
-  try {
-    const content = fs.readFileSync(LAST_SYNC_FILE, 'utf-8');
-    return new Date(content.trim());
-  } catch {
-    return null;
-  }
-}
-
 function setLastSync(): void {
   fs.writeFileSync(LAST_SYNC_FILE, new Date().toISOString());
 }
@@ -51,7 +41,7 @@ function loadUrgentQueue(): UrgentItem[] {
   if (fs.existsSync(URGENT_QUEUE_FILE)) {
     try {
       return JSON.parse(fs.readFileSync(URGENT_QUEUE_FILE, 'utf-8'));
-    } catch { }
+    } catch (_err) { /* ignore parse errors */ }
   }
   return [];
 }
@@ -76,8 +66,6 @@ function emitUrgent(item: UrgentItem): void {
   queue.push(item);
   if (queue.length > 20) queue.shift();
   saveUrgentQueue(queue);
-
-  const config = loadConfig();
   const notifier = createNotifier();
 
   const urgentResult: ProcessResult = {
@@ -106,7 +94,7 @@ export function loadDigestAccumulator(): DigestAccumulator {
   if (fs.existsSync(p)) {
     try {
       return JSON.parse(fs.readFileSync(p, 'utf-8'));
-    } catch { }
+    } catch (_err) { /* ignore parse errors */ }
   }
   return { items: [] };
 }
@@ -121,12 +109,13 @@ export function saveDigestAccumulator(acc: DigestAccumulator): void {
 export function shouldDeliverDigest(config: { deliveryMode?: string; digestTime?: string }): boolean {
   if (config.deliveryMode !== 'digest') return false;
   const now = new Date();
-  const digestTimeStr = config.digestTime || '08:00';
+  const digestTimeStr = config.digestTime || '07:30';
   const [hours, minutes] = digestTimeStr.split(':').map(Number);
   const digestTime = new Date(now);
   digestTime.setHours(hours, minutes, 0, 0);
 
-  if (now >= digestTime && now.getTime() < digestTime.getTime() + 120000) {
+  // 5-minute delivery window (wider than 2 min to handle cron jitter)
+  if (now >= digestTime && now.getTime() < digestTime.getTime() + 300000) {
     const acc = loadDigestAccumulator();
     if (!acc.last_delivered) return true;
     const last = new Date(acc.last_delivered).getTime();
@@ -137,7 +126,7 @@ export function shouldDeliverDigest(config: { deliveryMode?: string; digestTime?
 
 export async function runAgentCycle(): Promise<ProcessResult> {
   log('Starting agent cycle');
-  const db = openDB();
+  const db = _db();
   const config = loadConfig();
   const surfaced = loadGlobalSurfaced();
   const digestMode = config.deliveryMode === 'digest';

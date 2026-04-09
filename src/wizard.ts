@@ -62,7 +62,7 @@ async function askBackend(): Promise<'lmstudio' | 'ollama' | 'custom'> {
   return 'lmstudio';
 }
 
-async function askServerURL(backend: 'lmstudio' | 'ollama' | 'custom', defaultUrl?: string): Promise<string> {
+async function askServerURL(backend: 'lmstudio' | 'ollama' | 'custom', _defaultUrl?: string): Promise<string> {
   if (backend === 'custom') {
     console.log('\nCustom URL setup:\n');
     console.log('Enter the full API URL (e.g., http://192.168.1.100:1234/v1/chat/completions)\n');

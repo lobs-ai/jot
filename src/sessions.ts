@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { getAskSystemPrompt } from './prompting.js';
 import { getActiveBackend } from './config.js';
+
 
 export interface SessionMessage {
   role: 'user' | 'assistant';
