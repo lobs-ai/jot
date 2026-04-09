@@ -494,7 +494,7 @@ Search/List filters:
   --archived                    Include archived notes
 
 Examples:
-  jot add "meeting with advisor about project timeline"
+  jot note "meeting with advisor about project timeline"
   jot edit a1b2c3d4 "updated content here"
   jot search "meeting" --tag research
   jot list --from 2024-01-01 --to 2024-12-31
