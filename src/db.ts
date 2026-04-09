@@ -10,8 +10,11 @@ export interface Note {
   tags: string[];
   action_items: string[];
   linked_note_ids: string[];
+  projects: string[];
+  people: string[];
   analyzed: boolean;
   archived: boolean;
+  is_urgent: boolean;
   created_at: string;
   analyzed_at: string | null;
 }
@@ -70,8 +73,11 @@ function initDB(db: Database.Database): void {
         tags TEXT DEFAULT '[]',
         action_items TEXT DEFAULT '[]',
         linked_note_ids TEXT DEFAULT '[]',
+        projects TEXT DEFAULT '[]',
+        people TEXT DEFAULT '[]',
         analyzed INTEGER DEFAULT 0,
         archived INTEGER DEFAULT 0,
+        is_urgent INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
         analyzed_at TEXT
       );
@@ -86,6 +92,21 @@ function initDB(db: Database.Database): void {
     } catch {
       // column may already exist
     }
+    try {
+      db.exec(`ALTER TABLE notes ADD COLUMN projects TEXT DEFAULT '[]'`);
+    } catch {
+      // column may already exist
+    }
+    try {
+      db.exec(`ALTER TABLE notes ADD COLUMN people TEXT DEFAULT '[]'`);
+    } catch {
+      // column may already exist
+    }
+    try {
+      db.exec(`ALTER TABLE notes ADD COLUMN is_urgent INTEGER DEFAULT 0`);
+    } catch {
+      // column may already exist
+    }
   }
 
   db.exec(`
@@ -94,6 +115,22 @@ function initDB(db: Database.Database): void {
       insights_json TEXT NOT NULL,
       computed_at TEXT DEFAULT (datetime('now'))
     );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS todos (
+      id TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      due_date TEXT,
+      priority TEXT DEFAULT 'medium',
+      completed INTEGER DEFAULT 0,
+      completed_at TEXT,
+      note_id TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    
+    CREATE INDEX IF NOT EXISTS idx_todos_completed ON todos(completed);
+    CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todos(due_date);
   `);
 }
 
@@ -107,8 +144,11 @@ function rowToNote(row: any): Note {
     tags: JSON.parse(row.tags || '[]'),
     action_items: JSON.parse(row.action_items || '[]'),
     linked_note_ids: JSON.parse(row.linked_note_ids || '[]'),
+    projects: JSON.parse(row.projects || '[]'),
+    people: JSON.parse(row.people || '[]'),
     analyzed: Boolean(row.analyzed),
-    archived: Boolean(row.archived)
+    archived: Boolean(row.archived),
+    is_urgent: Boolean(row.is_urgent)
   };
 }
 
@@ -141,8 +181,11 @@ export function openDB(): DB {
         tags: [],
         action_items: [],
         linked_note_ids: [],
+        projects: [],
+        people: [],
         analyzed: false,
         archived: false,
+        is_urgent: false,
         created_at: now,
         analyzed_at: null
       };

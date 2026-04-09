@@ -15,7 +15,7 @@
 
 ```
 Layer 1 — Core CLI
-  jot add / search / list / tags / summarize / insights
+  jot note / search / list / tags / summarize / insights
   + instant return, async analysis
 
 Layer 2 — External Context
@@ -24,17 +24,17 @@ Layer 2 — External Context
   → Injects email/calendar data into analysis prompts
 
 Layer 3 — Background Processing
-  jot process (cron/launchd every 5min)
+  jot process (launchd/cron every 5min)
   + pluggable notifier interface
   → delivers action items, digests
 
 Layer 4 — Learned Memory
-  jot context store (projects, people, patterns)
+  jot context (projects, people, patterns)
   → Every note makes the next one smarter
 
-Layer 5 — Calendar Write
-  jot schedule "event" --when --duration
-  → Creates calendar events, asks first
+Layer 5 — Todo System
+  jot todo add / list / done / delete
+  → Todos linked to notes, with due dates and priorities
 ```
 
 ---
@@ -43,32 +43,14 @@ Layer 5 — Calendar Write
 
 ```
 ~/.jot/
-  notes.db           SQLite — notes, tags, action items
+  notes.db           SQLite — notes, tags, action items, projects, people
+  todos.db           SQLite — todos with due dates, priorities
   context.json       Learned memory (projects, people, patterns)
-  user.md            Identity file (frozen top + auto-learned bottom)
+  user.md            User context (auto-learned sections)
   config.json        Backends, URLs, notifier config
-  insights.db        Stored insights for instant display
-```
-
----
-
-## User.md Format
-
-```markdown
-# Frozen section — never auto-edited
-Name: Rafe
-Role: UMich CSE MS student, GSI for EECS 281/291
-Goals: PhD trajectory, make money, build best agentic system
-Commitments: Mon/Wed EECS 545, 491, CSE 590; Tue/Thu office hours + 281 lecture; Fri staff meeting
-Current projects: PAW (with Marcus), researchOS
-Key people: Marcus (PAW co-owner), advisors
-
-# Auto-learned section — Jot writes new discoveries here
-People:
-Projects:
-Priorities:
-Patterns:
-Last updated: YYYY-MM-DD
+  google-config.json Google integration settings
+  credentials/       Google OAuth/service account credentials
+  logs/              Agent logs
 ```
 
 ---
@@ -79,46 +61,57 @@ Last updated: YYYY-MM-DD
 CREATE TABLE notes (
   id TEXT PRIMARY KEY,
   content TEXT NOT NULL,
-  tags TEXT,              -- JSON: string[]
-  action_items TEXT,      -- JSON: { text, due?, priority }[]
-  projects TEXT,          -- JSON: string[]
-  people TEXT,            -- JSON: string[]
+  raw TEXT NOT NULL,
+  tags TEXT DEFAULT '[]',
+  action_items TEXT DEFAULT '[]',
+  linked_note_ids TEXT DEFAULT '[]',
+  projects TEXT DEFAULT '[]',
+  people TEXT DEFAULT '[]',
   analyzed INTEGER DEFAULT 0,
+  archived INTEGER DEFAULT 0,
   is_urgent INTEGER DEFAULT 0,
   created_at TEXT,
   analyzed_at TEXT
 );
 
-CREATE TABLE insights (
+CREATE TABLE todos (
   id TEXT PRIMARY KEY,
-  type TEXT,              -- 'pattern' | 'connection' | 'reminder'
-  content TEXT,
-  source_note_ids TEXT,  -- JSON: string[]
-  dismissed INTEGER DEFAULT 0,
+  content TEXT NOT NULL,
+  due_date TEXT,
+  priority TEXT DEFAULT 'medium',
+  completed INTEGER DEFAULT 0,
+  completed_at TEXT,
+  note_id TEXT,
   created_at TEXT
+);
+
+CREATE TABLE insights (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  insights_json TEXT NOT NULL,
+  computed_at TEXT
 );
 ```
 
 ---
 
-## Context.json Schema (Layer 4)
+## Context.json Schema
 
 ```typescript
 interface UserContext {
   projects: {
-    name: string;           // "PAW", "EECS 545 research"
-    summary: string;        // auto-generated description
-    relatedNotes: string[];// note IDs
-    lastUpdated: string;   // ISO date
+    name: string;
+    summary: string;
+    relatedNotes: string[];
+    lastUpdated: string;
   }[];
   people: {
-    name: string;          // "Marcus", "advisor"
-    context: string;        // "PAW co-owner, UMich CSE"
+    name: string;
+    context: string;
     relatedNotes: string[];
   }[];
-  priorities: string[];    // "finish literature review"
-  staleItems: string[];    // note IDs flagged as stale/unresolved
-  patterns: string[];      // recurring topics across notes
+  priorities: string[];
+  staleItems: string[];
+  patterns: string[];
 }
 ```
 
@@ -128,29 +121,44 @@ interface UserContext {
 
 ```json
 {
-  "backend": "lmstudio",
-  "backendUrl": "http://localhost:1234",
-  "model": "qwen3.5-9b",
-  "userFile": "~/.jot/user.md",
-  "dbPath": "~/.jot/notes.db",
-  "notifier": "discord",
+  "backends": {
+    "lmstudio": { "url": "http://localhost:1234/v1/chat/completions", "model": "qwen2.5-7b-instruct", "enabled": true, "apiType": "openai" },
+    "ollama": { "url": "http://localhost:11434/v1/chat/completions", "model": "llama3.2", "enabled": false, "apiType": "ollama" }
+  },
+  "defaultBackend": "lmstudio",
+  "analysis": { "extractActionItems": true, "linkRelatedNotes": true, "autoAnalyze": true },
+  "notifier": "none",
   "discordWebhook": "",
-  "deliveryMode": "urgent",
-  "digestTime": "08:00",
-  "processInterval": 300
+  "deliveryMode": "urgent"
 }
 ```
 
 ---
 
-## Prompt Architecture
+## Agent Cycle (Background Daemon)
 
-Every jot command injects:
-1. **`user.md`** (frozen + auto-learned) — "you are Rafe, MS student at UMich..."
-2. **`context.json`** — "you have 2 active projects, last note about PAW..."
-3. **Relevant notes** — notes related to the current query
+```
+Every 5 minutes (launchd/cron):
+1. Analyze new notes
+   - For each unanalyzed note:
+     a. Read user.md + context.json into prompt
+     b. Run analysis (local model)
+     c. UPDATE note with tags/actions/projects/people
+     d. UPDATE context.json (new projects, people, patterns)
+2. Create todos from action_items
+3. Sync external data (if enabled)
+   - Fetch Gmail → cache for context
+   - Fetch Calendar → cache for context
+4. Check todo status
+   - Find overdue todos → add to urgent notification
+   - Find due-today todos
+5. If threshold breached OR digest time:
+   - Load notifier from config
+   - notifier.deliver(results)
+6. Mark last-processed timestamp
+```
 
-This gets richer over time without code changes.
+Idempotent — re-running no-ops for already-processed notes.
 
 ---
 
@@ -158,11 +166,11 @@ This gets richer over time without code changes.
 
 ```typescript
 interface Notifier {
-  deliver(result: ProcessResult): void;
+  deliver(result: ProcessResult): Promise<void>;
 }
 
 class DiscordNotifier implements Notifier { /* POST to webhook */ }
-class TerminalNotifier implements Notifier { /* osascript notification */ }
+class TerminalNotifier implements Notifier { /* console.log */ }
 class WebhookNotifier implements Notifier { /* HTTP POST */ }
 ```
 
@@ -173,39 +181,52 @@ class WebhookNotifier implements Notifier { /* HTTP POST */ }
 
 ---
 
-## jot process (cron daemon)
+## Todo System
 
-```
-Every 5 minutes (launchd/cron):
-1. SELECT notes WHERE analyzed = false
-2. For each note:
-   a. Read user.md + context.json into prompt
-   b. Run analysis (local model)
-   c. UPDATE note with tags/actions
-   d. UPDATE context.json (new projects, people, patterns)
-3. Check thresholds (urgent items, stale notes)
-4. If threshold breached OR digest time:
-   a. Load notifier from config
-   b. notifier.deliver(results)
-5. Mark last-processed timestamp
-```
-
-Idempotent — re-running no-ops for already-processed notes.
+Todos are first-class citizens:
+- Created automatically from action_items extracted by AI
+- Can be created manually with `jot todo add`
+- Linked to source note via `note_id`
+- Due dates and priorities for filtering
+- `jot todo list --overdue` to see what's past due
 
 ---
 
-## Phase 1 Scope (ship first)
+## Google Integration
 
-- [x] jot add / search / list / tags (CLI stable)
+```bash
+jot google setup <path-to-oauth-client.json>  Save Google OAuth client credentials
+jot google auth                              Complete browser OAuth flow and save refresh token
+jot google gmail --enable                    Enable Gmail integration
+jot google calendar --enable                 Enable Calendar integration
+jot context gmail --days 3                   Read recent Gmail messages
+jot context calendar --week                  Read upcoming calendar events
+```
+
+---
+
+## Implementation Status
+
+### Completed
+- [x] Core CLI: note, search, list, tags, summarize
 - [x] LM Studio / Ollama integration
-- [ ] `user.md` created on setup, injected into every prompt
-- [ ] Auto-learned section updated by analyzer
-- [ ] Gmail context read (`jot context gmail --days 3`)
-- [ ] Calendar context read (`jot context calendar --week`)
-- [ ] Action items delivered to Discord when found
-- [ ] Async: instant return, background analysis, notification on completion
+- [x] Async: instant return, detached background analysis
+- [x] user.md created on setup, injected into prompts
+- [x] Auto-learned section updated by analyzer
+- [x] Gmail OAuth2 + Gmail API read integration
+- [x] Calendar OAuth2 + Calendar API read integration
+- [x] Todo system with DB and CLI
+- [x] Agent core with background processing
+- [x] Pluggable notifier interface
+- [x] macOS launchd installer script
 
-**Not in Phase 1:** context.json store (Phase 4), calendar write (Phase 5), background daemon scheduling.
+### In Progress
+- [ ] Jot ask command (rich query to agent)
+- [ ] Rich context injection into all prompts
+
+### Not Yet Implemented
+- Calendar write (Layer 5)
+- Agent scheduling on non-macOS platforms
 
 ---
 
@@ -213,8 +234,9 @@ Idempotent — re-running no-ops for already-processed notes.
 
 | Question | Answer |
 |----------|--------|
-| user.md updates | Jot auto-updates auto-learned section only; frozen section is hands-off |
+| user.md updates | Jot auto-updates auto-learned section only |
 | Context store updates | Auto-update from notes as they're analyzed |
 | Delivery trigger | Config option — urgent-only default |
-| Gmail auth | Existing Google OAuth tokens in `~/.lobs/credentials/` |
+| Gmail auth | Google OAuth2 flow with refresh tokens |
 | Context storage | SQLite + JSON file (context.json for quick reads) |
+| Todo source | Created from action_items OR manually |

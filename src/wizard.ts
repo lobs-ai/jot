@@ -1,14 +1,14 @@
 import * as readline from 'readline';
 import { saveConfig, loadConfig, Config, BackendConfig } from './config.js';
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
-
 function question(prompt: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
   return new Promise(resolve => {
     rl.question(prompt, answer => {
+      rl.close();
       resolve(answer.trim());
     });
   });
@@ -19,54 +19,99 @@ function clearLine(): void {
   readline.clearLine(process.stdout, 0);
 }
 
-async function askBackend(): Promise<'lmstudio' | 'ollama'> {
-  console.log('\n=== Jot Setup Wizard ===\n');
-  console.log('First, let\'s choose your AI backend:\n');
-  console.log('  1) LM Studio (recommended)');
-  console.log('     - Download from https://lmstudio.ai/');
-  console.log('     - Download a model and start the local server');
-  console.log('');
-  console.log('  2) Ollama');
-  console.log('     - Download from https://ollama.ai/');
-  console.log('     - Run: ollama serve && ollama pull <model>\n');
-
-  const answer = await question('Which backend do you want to use? (1/2) [1]: ');
-  const backend = answer === '2' ? 'ollama' : 'lmstudio';
-  clearLine();
-  return backend;
+async function fetchLMStudioModels(baseUrl: string): Promise<string[]> {
+  try {
+    const url = baseUrl.replace('/v1/chat/completions', '') + '/api/v0/models';
+    const response = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(3000) });
+    if (response.ok) {
+      const data = await response.json() as { data?: { id: string }[] };
+      return data.data?.map(m => m.id) || [];
+    }
+  } catch {
+    // failed to fetch
+  }
+  return [];
 }
 
-async function askModelName(backend: 'lmstudio' | 'ollama'): Promise<string> {
-  console.log('\nModel setup:\n');
+async function fetchOllamaModels(baseUrl: string): Promise<string[]> {
+  try {
+    const url = baseUrl.replace('/v1/chat/completions', '') + '/api/tags';
+    const response = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(3000) });
+    if (response.ok) {
+      const data = await response.json() as { models?: { name: string }[] };
+      return data.models?.map(m => m.name) || [];
+    }
+  } catch {
+    // failed to fetch
+  }
+  return [];
+}
+
+async function askBackend(): Promise<'lmstudio' | 'ollama' | 'custom'> {
+  console.log('\n=== Jot Setup Wizard ===\n');
+  console.log('Choose your AI backend:\n');
+  console.log('  1) LM Studio');
+  console.log('  2) Ollama');
+  console.log('  3) Custom URL (connect to another machine)\n');
+
+  const answer = await question('Which backend? (1/2/3) [1]: ');
+  const choice = answer.toLowerCase() || '1';
   
-  if (backend === 'lmstudio') {
-    console.log('In LM Studio:');
-    console.log('  1. Download a model (try "qwen2.5-7b" or "llama3.2-3b" for starters)');
-    console.log('  2. Click "Start Server" (usually at http://127.0.0.1:1234)');
-    console.log('  3. The model name is shown in LM Studio (e.g., "qwen2.5-7b-instruct")\n');
-  } else {
-    console.log('In terminal:');
-    console.log('  ollama pull <model>  (try "llama3.2" or "qwen2.5" or "gemma4")\n');
+  if (choice === '2') return 'ollama';
+  if (choice === '3') return 'custom';
+  return 'lmstudio';
+}
+
+async function askServerURL(backend: 'lmstudio' | 'ollama' | 'custom', defaultUrl?: string): Promise<string> {
+  if (backend === 'custom') {
+    console.log('\nCustom URL setup:\n');
+    console.log('Enter the full API URL (e.g., http://192.168.1.100:1234/v1/chat/completions)\n');
+    const url = await question('Server URL: ');
+    return url;
   }
 
-  const suggested = backend === 'lmstudio' ? 'qwen2.5-7b-instruct' : 'llama3.2';
-  const answer = await question(`Model name [${suggested}]: `);
-  clearLine();
-  return answer || suggested;
-}
-
-async function askServerURL(backend: 'lmstudio' | 'ollama'): Promise<string> {
   const defaultURL = backend === 'lmstudio' 
     ? 'http://127.0.0.1:1234/v1/chat/completions'
     : 'http://127.0.0.1:11434/v1/chat/completions';
 
-  console.log('\nServer URL:\n');
-  console.log(`Default for ${backend}: ${defaultURL}`);
-  console.log('(Usually you can just press Enter)\n');
+  console.log(`\nServer URL (${backend}):`);
+  console.log(`Default: ${defaultURL}\n`);
 
-  const answer = await question(`Server URL [${defaultURL}]: `);
+  const url = await question(`Server URL [${defaultURL}]: `);
+  return url || defaultURL;
+}
+
+async function askModelName(backend: 'lmstudio' | 'ollama', url: string): Promise<string> {
+  console.log('\nFetching available models...\n');
+  
+  const models = backend === 'lmstudio' 
+    ? await fetchLMStudioModels(url)
+    : await fetchOllamaModels(url);
+
+  if (models.length > 0) {
+    console.log(`Available models on ${backend}:`);
+    models.forEach((model, i) => console.log(`  ${i + 1}) ${model}`));
+    console.log('');
+    
+    const answer = await question('Choose a model (number) or type custom name: ');
+    const num = parseInt(answer);
+    if (num > 0 && num <= models.length) {
+      clearLine();
+      return models[num - 1];
+    }
+    if (answer.trim()) {
+      clearLine();
+      return answer.trim();
+    }
+  } else {
+    console.log(`Could not fetch models from ${url}`);
+    console.log('Enter model name manually.\n');
+  }
+
+  const suggested = backend === 'lmstudio' ? 'qwen2.5-7b-instruct' : 'llama3.2';
+  const model = await question(`Model name [${suggested}]: `);
   clearLine();
-  return answer || defaultURL;
+  return model || suggested;
 }
 
 async function askAnalysisOptions(): Promise<{
@@ -87,11 +132,11 @@ async function askAnalysisOptions(): Promise<{
   clearLine();
   clearLine();
 
-  const extractActionItems = actionItemsAnswer.toLowerCase() !== 'n';
-  const linkRelatedNotes = linkNotesAnswer.toLowerCase() !== 'n';
-  const autoAnalyze = autoAnalyzeAnswer.toLowerCase() !== 'n';
-
-  return { extractActionItems, linkRelatedNotes, autoAnalyze };
+  return {
+    extractActionItems: actionItemsAnswer.toLowerCase() !== 'n',
+    linkRelatedNotes: linkNotesAnswer.toLowerCase() !== 'n',
+    autoAnalyze: autoAnalyzeAnswer.toLowerCase() !== 'n'
+  };
 }
 
 async function askCompletion(): Promise<void> {
@@ -100,61 +145,68 @@ async function askCompletion(): Promise<void> {
   console.log('  jot note "my first note"          Add a note');
   console.log('  jot list                          See all notes');
   console.log('  jot search "keyword"             Search notes');
-  console.log('  jot insights                      Get AI-powered insights\n');
+  console.log('  jot insights                       Get AI-powered insights\n');
   console.log('Run "jot" without arguments for full help.\n');
 }
 
-export async function runSetupWizard(configPath?: string): Promise<void> {
-  try {
-    const existingConfig = loadConfig(configPath);
-    
-    if (existingConfig.backends.lmstudio || existingConfig.backends.ollama) {
-      const answer = await question('\nConfiguration exists. Re-run setup wizard? [y/N]: ');
-      if (answer.toLowerCase() !== 'y') {
-        clearLine();
-        console.log('\nKeeping existing configuration.\n');
-        rl.close();
-        return;
-      }
+export async function runSetupWizard(): Promise<void> {
+  const existingConfig = loadConfig();
+  
+  if (existingConfig.backends.lmstudio || existingConfig.backends.ollama) {
+    const answer = await question('\nConfiguration exists. Re-run setup wizard? [y/N]: ');
+    if (answer.toLowerCase() !== 'y') {
       clearLine();
+      console.log('\nKeeping existing configuration.\n');
+      return;
     }
-
-    const backend = await askBackend();
-    const model = await askModelName(backend);
-    const url = await askServerURL(backend);
-    const analysisOptions = await askAnalysisOptions();
-
-    const lmstudioConfig: BackendConfig = {
-      url: backend === 'lmstudio' ? url : 'http://127.0.0.1:1234/v1/chat/completions',
-      model: backend === 'lmstudio' ? model : 'qwen2.5-7b-instruct',
-      enabled: backend === 'lmstudio',
-      apiType: 'openai'
-    };
-
-    const ollamaConfig: BackendConfig = {
-      url: backend === 'ollama' ? url : 'http://127.0.0.1:11434/v1/chat/completions',
-      model: backend === 'ollama' ? model : 'llama3.2',
-      enabled: backend === 'ollama',
-      apiType: 'ollama'
-    };
-
-    const newConfig: Config = {
-      backends: {
-        lmstudio: lmstudioConfig,
-        ollama: ollamaConfig
-      },
-      defaultBackend: backend,
-      remote: { enabled: false, url: '' },
-      analysis: {
-        extractActionItems: analysisOptions.extractActionItems,
-        linkRelatedNotes: analysisOptions.linkRelatedNotes,
-        autoAnalyze: analysisOptions.autoAnalyze
-      }
-    };
-
-    saveConfig(newConfig);
-    await askCompletion();
-  } finally {
-    rl.close();
+    clearLine();
   }
+
+  const backend = await askBackend();
+  
+  let serverUrl: string;
+  let actualBackend: 'lmstudio' | 'ollama';
+  
+  if (backend === 'custom') {
+    serverUrl = await askServerURL('custom');
+    const isOllama = serverUrl.includes('11434');
+    actualBackend = isOllama ? 'ollama' : 'lmstudio';
+  } else {
+    serverUrl = await askServerURL(backend);
+    actualBackend = backend;
+  }
+
+  const model = await askModelName(actualBackend, serverUrl);
+  const analysisOptions = await askAnalysisOptions();
+
+  const lmstudioConfig: BackendConfig = {
+    url: serverUrl,
+    model: model,
+    enabled: actualBackend === 'lmstudio',
+    apiType: 'openai'
+  };
+
+  const ollamaConfig: BackendConfig = {
+    url: serverUrl,
+    model: model,
+    enabled: actualBackend === 'ollama',
+    apiType: actualBackend === 'ollama' ? 'ollama' : 'openai'
+  };
+
+  const newConfig: Config = {
+    backends: {
+      lmstudio: actualBackend === 'lmstudio' ? lmstudioConfig : { ...lmstudioConfig, enabled: false },
+      ollama: actualBackend === 'ollama' ? ollamaConfig : { ...ollamaConfig, enabled: false }
+    },
+    defaultBackend: actualBackend,
+    remote: { enabled: false, url: '' },
+    analysis: {
+      extractActionItems: analysisOptions.extractActionItems,
+      linkRelatedNotes: analysisOptions.linkRelatedNotes,
+      autoAnalyze: analysisOptions.autoAnalyze
+    }
+  };
+
+  saveConfig(newConfig);
+  await askCompletion();
 }

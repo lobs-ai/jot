@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 import { openDB, Note } from './db.js';
-import { runAnalysisCycle } from './analyzer.js';
+import { runAnalysisCycle, runProcessCycle } from './analyzer.js';
 import { loadConfig, getConfigPath, saveConfig } from './config.js';
 import { generateInsights, generateDeepInsights, getStoredInsights, saveInsights, formatInsights } from './insights.js';
 import { runSetupWizard } from './wizard.js';
+import { userFileExists, createUserFile, readUserFile, readContext } from './context.js';
+import { createNotifier, shouldNotify } from './notifier.js';
+import { runAgentCycle, notifyIfNeeded } from './agent.js';
+import { setupGoogleCredentials, enableGoogleService, fetchGmailEmails, fetchCalendarEvents, authenticateGoogle, getGoogleStatus } from './google.js';
+import { insertTodo, getTodos, updateTodo, completeTodo, uncompleteTodo, deleteTodo, formatTodoList, Todo } from './todos.js';
 import * as readline from 'readline';
+import * as child_process from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -44,6 +50,90 @@ function askQuestion(prompt: string): Promise<string> {
       resolve(answer.trim());
     });
   });
+}
+
+async function cmdTodo(args: string[]): Promise<void> {
+  if (args.length === 0 || args[0] === 'list') {
+    const filters = {
+      includeCompleted: args.includes('--all'),
+      overdue: args.includes('--overdue'),
+      dueToday: args.includes('--today'),
+      priority: (args.includes('--high') ? 'high' : args.includes('--low') ? 'low' : undefined) as 'high' | 'medium' | 'low' | undefined
+    };
+    const todos = getTodos(filters);
+    console.log(formatTodoList(todos));
+    return;
+  }
+
+  const subcmd = args[0];
+
+  if (subcmd === 'add') {
+    const content = args.slice(1).join(' ');
+    if (!content) {
+      console.error('Usage: jot todo add "task" [--due YYYY-MM-DD] [--priority high|medium|low]');
+      process.exit(1);
+    }
+    const dueDate = extractFlag(args, '--due');
+    const priority = args.includes('--high') ? 'high' : args.includes('--low') ? 'low' : 'medium';
+    const todo = insertTodo(content, dueDate, priority);
+    console.log(`Todo added: ${todo.id.slice(0, 8)}`);
+    return;
+  }
+
+  if (subcmd === 'done') {
+    const id = args[1];
+    if (!id) {
+      console.error('Usage: jot todo done <id>');
+      process.exit(1);
+    }
+    completeTodo(id);
+    console.log(`Completed: ${id.slice(0, 8)}`);
+    return;
+  }
+
+  if (subcmd === 'delete') {
+    const id = args[1];
+    if (!id) {
+      console.error('Usage: jot todo delete <id>');
+      process.exit(1);
+    }
+    deleteTodo(id);
+    console.log(`Deleted: ${id.slice(0, 8)}`);
+    return;
+  }
+
+  if (subcmd === 'edit') {
+    const id = args[1];
+    if (!id) {
+      console.error('Usage: jot todo edit <id> "content" [--due YYYY-MM-DD] [--priority high|medium|low]');
+      process.exit(1);
+    }
+    const content = args.slice(2).join(' ').replace(/^"(.+)"$/, '$1');
+    const dueDate = extractFlag(args, '--due');
+    const priority = args.includes('--high') ? 'high' : args.includes('--low') ? 'low' : args.includes('--medium') ? 'medium' : undefined;
+    updateTodo(id, {
+      content: content || undefined,
+      due_date: dueDate,
+      priority
+    });
+    console.log(`Updated: ${id.slice(0, 8)}`);
+    return;
+  }
+
+  if (subcmd === 'undo') {
+    const id = args[1];
+    if (!id) {
+      console.error('Usage: jot todo undo <id>');
+      process.exit(1);
+    }
+    uncompleteTodo(id);
+    console.log(`Restored: ${id.slice(0, 8)}`);
+    return;
+  }
+
+  console.error(`Unknown todo subcommand: ${subcmd}`);
+  console.error('Usage: jot todo [add|list|done|delete|edit|undo]');
+  process.exit(1);
 }
 
 async function cmdAdd(args: string[]): Promise<void> {
@@ -464,10 +554,147 @@ async function cmdExport(args: string[]): Promise<void> {
   }
 }
 
+async function cmdProcess(args: string[]): Promise<void> {
+  const result = await runAgentCycle();
+  console.log(result.summary);
+
+  if (args.includes('--notify')) {
+    await notifyIfNeeded(result);
+    console.log('Notifications processed.');
+  }
+}
+
+async function cmdGoogle(args: string[]): Promise<void> {
+  const subcmd = args[0] || 'status';
+
+  if (subcmd === 'setup') {
+    const credentialsPath = args[1];
+    if (!credentialsPath) {
+      console.error('Usage: jot google setup <path-to-oauth-client.json>');
+      process.exit(1);
+    }
+    setupGoogleCredentials(credentialsPath);
+    return;
+  }
+
+  if (subcmd === 'auth') {
+    await authenticateGoogle();
+    return;
+  }
+
+  if (subcmd === 'gmail' || subcmd === 'calendar') {
+    if (args.includes('--enable')) {
+      enableGoogleService(subcmd, true);
+      return;
+    }
+    if (args.includes('--disable')) {
+      enableGoogleService(subcmd, false);
+      return;
+    }
+
+    const status = getGoogleStatus();
+    const enabled = subcmd === 'gmail' ? status.config.gmail_enabled : status.config.calendar_enabled;
+    console.log(`${subcmd}: ${enabled ? 'enabled' : 'disabled'}`);
+    return;
+  }
+
+  if (subcmd === 'status') {
+    const status = getGoogleStatus();
+    console.log('\n=== Google Integration ===');
+    console.log(`Credentials: ${status.hasCredentials ? 'configured' : 'missing'}`);
+    console.log(`Tokens: ${status.hasTokens ? 'configured' : 'missing'}`);
+    console.log(`Gmail: ${status.config.gmail_enabled ? 'enabled' : 'disabled'}`);
+    console.log(`Calendar: ${status.config.calendar_enabled ? 'enabled' : 'disabled'}`);
+    console.log(`Client file: ${status.config.credentials_path}`);
+    console.log(`Token file: ${status.config.tokens_path}`);
+    return;
+  }
+
+  console.error('Usage: jot google [setup|auth|status|gmail|calendar]');
+  console.error('       jot google setup <path-to-oauth-client.json>');
+  console.error('       jot google auth');
+  console.error('       jot google gmail --enable|--disable');
+  console.error('       jot google calendar --enable|--disable');
+  process.exit(1);
+}
+
+async function cmdContext(args: string[]): Promise<void> {
+  const subcmd = args[0] || 'summary';
+
+  if (subcmd === 'user') {
+    const userContext = readUserFile();
+    if (!userContext.trim()) {
+      console.log('No user context file yet. Run `jot init --wizard` or add notes first.');
+      return;
+    }
+    console.log(userContext);
+    return;
+  }
+
+  if (subcmd === 'gmail') {
+    const daysValue = extractFlag(args, '--days');
+    const days = daysValue ? Number(daysValue) : 3;
+    const emails = await fetchGmailEmails(Number.isFinite(days) ? days : 3);
+
+    if (emails.length === 0) {
+      console.log('No Gmail messages found.');
+      return;
+    }
+
+    console.log(`\n=== Gmail (${emails.length}) ===`);
+    emails.forEach((email, index) => {
+      console.log(`\n${index + 1}. ${email.subject}`);
+      console.log(`From: ${email.from}`);
+      if (email.date) {
+        console.log(`Date: ${email.date}`);
+      }
+      if (email.snippet) {
+        console.log(email.snippet);
+      }
+    });
+    return;
+  }
+
+  if (subcmd === 'calendar') {
+    const weeksValue = extractFlag(args, '--weeks');
+    const weeks = args.includes('--week') ? 1 : weeksValue ? Number(weeksValue) : 1;
+    const events = await fetchCalendarEvents(Number.isFinite(weeks) ? weeks : 1);
+
+    if (events.length === 0) {
+      console.log('No calendar events found.');
+      return;
+    }
+
+    console.log(`\n=== Calendar (${events.length}) ===`);
+    events.forEach((event, index) => {
+      console.log(`\n${index + 1}. ${event.summary}`);
+      console.log(`Start: ${event.start}`);
+      console.log(`End: ${event.end}`);
+      if (event.location) {
+        console.log(`Location: ${event.location}`);
+      }
+      if (event.attendees && event.attendees.length > 0) {
+        console.log(`Attendees: ${event.attendees.join(', ')}`);
+      }
+    });
+    return;
+  }
+
+  if (subcmd === 'summary') {
+    console.log(JSON.stringify(readContext(), null, 2));
+    return;
+  }
+
+  console.error('Usage: jot context [user|gmail|calendar]');
+  console.error('       jot context gmail --days 3');
+  console.error('       jot context calendar --week');
+  process.exit(1);
+}
+
 const [cmd, ...args] = process.argv.slice(2);
 
 if (!cmd) {
-  console.log(`Jot - local AI note-taking CLI
+  console.log(`Jot - local AI note-taking CLI and mini-agent
 
 Usage: jot <command> [options]
 
@@ -482,10 +709,21 @@ Commands:
   jot tags [tag]               List tags or filter by tag
   jot summarize                Quick summary
   jot analyze                 Run analysis on unanalyzed notes
+  jot process [--notify]       Background processing with notifications
   jot insights                 Deep corpus analysis (AI-powered)
+  jot context [user|gmail|calendar]  View/inject context
+  jot google [setup|auth|status|gmail|calendar]  Google integration settings
+  jot todo [add|list|done|delete|edit]  Manage todos
   jot export [--json|--markdown]  Export notes
   jot config [subcommand]      View or update config
   jot init [--wizard]         Initialize or reconfigure
+
+Todo filters:
+  jot todo list [--all] [--overdue] [--today] [--high] [--low]
+  jot todo add "task" [--due YYYY-MM-DD] [--priority high|medium|low]
+  jot todo done <id>           Mark todo complete
+  jot todo delete <id>          Delete todo
+  jot todo edit <id> "content" [--due YYYY-MM-DD] [--priority high|medium|low]
 
 Search/List filters:
   --tag/-t <tag>               Filter by tag
@@ -498,8 +736,11 @@ Examples:
   jot edit a1b2c3d4 "updated content here"
   jot search "meeting" --tag research
   jot list --from 2024-01-01 --to 2024-12-31
-  jot link a1b2c3d4 e5f6g7h8
-  jot export --markdown --tag work
+  jot todo add "finish literature review" --due 2024-03-15 --priority high
+  jot todo list --overdue
+  jot context                   View learned context
+  jot google gmail --enable    Enable Gmail integration
+  jot process --notify          Run with notifications
 
 Config location: ~/.jot/config.json
 Data location: ~/.jot/notes.db`);
@@ -567,6 +808,18 @@ switch (cmd) {
       process.exit(1);
     });
     break;
+  case 'todo':
+    cmdTodo(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'process':
+    cmdProcess(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
   case 'insights':
     cmdInsights().catch(err => {
       console.error('Error:', err.message);
@@ -587,6 +840,18 @@ switch (cmd) {
     break;
   case 'init':
     cmdInit(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'google':
+    cmdGoogle(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'context':
+    cmdContext(args).catch(err => {
       console.error('Error:', err.message);
       process.exit(1);
     });

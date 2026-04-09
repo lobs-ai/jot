@@ -31,21 +31,27 @@ export interface Config {
   defaultBackend: 'lmstudio' | 'ollama';
   remote: RemoteConfig;
   analysis: AnalysisConfig;
+  notifier?: 'discord' | 'terminal' | 'webhook' | 'none';
+  discordWebhook?: string;
+  deliveryMode?: 'urgent' | 'digest' | 'always';
+  digestTime?: string;
+  processInterval?: number;
+  userFile?: string;
 }
 
 const DEFAULT_CONFIG: Config = {
   backends: {
     lmstudio: {
       url: 'http://127.0.0.1:1234/v1/chat/completions',
-      model: 'qwen3.5-9b',
+      model: 'qwen2.5-7b-instruct',
       enabled: true,
       apiType: 'openai'
     },
     ollama: {
       url: 'http://127.0.0.1:11434/v1/chat/completions',
-      model: 'gemma4:e4b',
+      model: 'llama3.2',
       enabled: false,
-      apiType: 'openai'
+      apiType: 'ollama'
     }
   },
   defaultBackend: 'lmstudio',
@@ -57,15 +63,21 @@ const DEFAULT_CONFIG: Config = {
     extractActionItems: true,
     linkRelatedNotes: true,
     autoAnalyze: true
-  }
+  },
+  notifier: 'none',
+  discordWebhook: '',
+  deliveryMode: 'urgent',
+  digestTime: '08:00',
+  processInterval: 300,
+  userFile: '~/.jot/user.md'
 };
 
 export function getConfigPath(): string {
   return path.join(os.homedir(), '.jot', 'config.json');
 }
 
-export function loadConfig(_configPath?: string): Config {
-  const configPath = _configPath || getConfigPath();
+export function loadConfig(): Config {
+  const configPath = getConfigPath();
   const configDir = path.dirname(configPath);
 
   if (!fs.existsSync(configDir)) {
@@ -87,15 +99,21 @@ export function loadConfig(_configPath?: string): Config {
       },
       defaultBackend: userConfig.defaultBackend || DEFAULT_CONFIG.defaultBackend,
       remote: { ...DEFAULT_CONFIG.remote, ...userConfig.remote },
-      analysis: { ...DEFAULT_CONFIG.analysis, ...userConfig.analysis }
+      analysis: { ...DEFAULT_CONFIG.analysis, ...userConfig.analysis },
+      notifier: userConfig.notifier || DEFAULT_CONFIG.notifier,
+      discordWebhook: userConfig.discordWebhook || DEFAULT_CONFIG.discordWebhook,
+      deliveryMode: userConfig.deliveryMode || DEFAULT_CONFIG.deliveryMode,
+      digestTime: userConfig.digestTime || DEFAULT_CONFIG.digestTime,
+      processInterval: userConfig.processInterval || DEFAULT_CONFIG.processInterval,
+      userFile: userConfig.userFile || DEFAULT_CONFIG.userFile
     };
   } catch {
     return DEFAULT_CONFIG;
   }
 }
 
-export function saveConfig(config: Config, _configPath?: string): void {
-  const configPath = _configPath || getConfigPath();
+export function saveConfig(config: Config): void {
+  const configPath = getConfigPath();
   const configDir = path.dirname(configPath);
   
   if (!fs.existsSync(configDir)) {
@@ -105,69 +123,19 @@ export function saveConfig(config: Config, _configPath?: string): void {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 }
 
-export function setDefaultBackend(backend: 'lmstudio' | 'ollama'): Config {
-  const current = loadConfig();
-  current.defaultBackend = backend;
-  saveConfig(current);
-  return current;
-}
-
-export function setRemoteConfig(url: string, enabled: boolean = true): Config {
-  const current = loadConfig();
-  current.remote.enabled = enabled;
-  current.remote.url = url;
-  saveConfig(current);
-  return current;
-}
-
-export function disableRemote(): Config {
-  const current = loadConfig();
-  current.remote.enabled = false;
-  saveConfig(current);
-  return current;
-}
-
-export function setBackendModel(backend: 'lmstudio' | 'ollama', model: string): Config {
-  const current = loadConfig();
-  if (current.backends[backend]) {
-    current.backends[backend]!.model = model;
-  }
-  saveConfig(current);
-  return current;
-}
-
-export function setBackendUrl(backend: 'lmstudio' | 'ollama', url: string): Config {
-  const current = loadConfig();
-  if (current.backends[backend]) {
-    current.backends[backend]!.url = url;
-  }
-  saveConfig(current);
-  return current;
-}
-
-export function setBackendApiType(backend: 'lmstudio' | 'ollama', apiType: ApiType): Config {
-  const current = loadConfig();
-  if (current.backends[backend]) {
-    current.backends[backend]!.apiType = apiType;
-  }
-  saveConfig(current);
-  return current;
-}
-
 export function getActiveBackend(): { url: string; model: string; apiType: ApiType } {
   const config = loadConfig();
   
   if (config.remote.enabled && config.remote.url) {
     return { 
       url: config.remote.url, 
-      model: config.backends[config.defaultBackend]?.model || 'qwen3.5-9b',
+      model: config.backends[config.defaultBackend]?.model || 'qwen2.5-7b-instruct',
       apiType: 'openai' 
     };
   }
   
   const backend = config.backends[config.defaultBackend];
   if (!backend?.enabled) {
-    // Fall back to the first enabled backend
     const lmstudio = config.backends.lmstudio;
     const ollama = config.backends.ollama;
     if (lmstudio?.enabled) {
@@ -180,4 +148,14 @@ export function getActiveBackend(): { url: string; model: string; apiType: ApiTy
   }
   
   return { url: backend.url, model: backend.model, apiType: backend.apiType || 'openai' };
+}
+
+export function getDBPath(): string {
+  return path.join(os.homedir(), '.jot', 'notes.db');
+}
+
+export function getUserFilePath(): string {
+  const config = loadConfig();
+  const userFile = config.userFile || '~/.jot/user.md';
+  return userFile.replace('~', os.homedir());
 }
