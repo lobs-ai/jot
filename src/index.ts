@@ -29,7 +29,7 @@ function printNote(note: Note, showRaw = false): void {
 async function cmdAdd(args: string[]): Promise<void> {
   const content = args.join(' ');
   if (!content.trim()) {
-    console.error('Usage: jot-note add "your note here"');
+    console.error('Usage: jot add "your note here"');
     process.exit(1);
   }
 
@@ -46,7 +46,7 @@ async function cmdAdd(args: string[]): Promise<void> {
 async function cmdSearch(args: string[]): Promise<void> {
   const query = args.join(' ');
   if (!query.trim()) {
-    console.error('Usage: jot-note search "query"');
+    console.error('Usage: jot search "query"');
     process.exit(1);
   }
 
@@ -94,7 +94,7 @@ async function cmdTags(args: string[]): Promise<void> {
 async function cmdList(args: string[]): Promise<void> {
   const allNotes = db.getAllNotes();
   if (allNotes.length === 0) {
-    console.log('No notes yet. Try: jot-note add "your first note"');
+    console.log('No notes yet. Try: jot add "your first note"');
     return;
   }
 
@@ -198,9 +198,9 @@ async function cmdConfig(args: string[]): Promise<void> {
   }
 
   console.log('To edit config, open:', configPath);
-  console.log('Usage: jot-note config backend lmstudio|ollama');
-  console.log('       jot-note config remote <url>');
-  console.log('       jot-note config remote off');
+  console.log('Usage: jot config backend lmstudio|ollama');
+  console.log('       jot config remote <url>');
+  console.log('       jot config remote off');
 }
 
 async function main(): Promise<void> {
@@ -208,30 +208,30 @@ async function main(): Promise<void> {
 
   if (!command || command === 'help' || command === '--help' || command === '-h') {
     console.log(`
-jot-note — Local AI Note-Taking CLI
+jot — Local AI Note-Taking CLI
 
 Usage:
-  jot-note add "your note here"     Capture a new note (instant save, async analysis)
-  jot-note search "query"            Search notes by content
-  jot-note tags [#tag]              List notes by tag, or show all tags
-  jot-note list [--raw]             List all notes
-  jot-note summarize                Summary of all notes (counts, tags, actions)
-  jot-note analyze                  Run analysis on unanalyzed notes
-  jot-note insights                 Generate corpus-level insights and trends
-  jot-note config [key] [value]     Show or update configuration
-  jot-note help                     Show this help
+  jot add "your note here"     Capture a new note (instant save, async analysis)
+  jot search "query"            Search notes by content
+  jot tags [#tag]              List notes by tag, or show all tags
+  jot list [--raw]             List all notes
+  jot summarize                Summary of all notes (counts, tags, actions)
+  jot analyze                  Run analysis on unanalyzed notes
+  jot insights                 Generate corpus-level insights and trends
+  jot config [key] [value]     Show or update configuration
+  jot help                     Show this help
 
 Configuration:
-  jot-note config                   Show current config
-  jot-note config backend lmstudio  Set default backend
-  jot-note config remote <url>      Enable remote model endpoint
-  jot-note config remote off         Disable remote
+  jot config                   Show current config
+  jot config backend lmstudio  Set default backend
+  jot config remote <url>      Enable remote model endpoint
+  jot config remote off         Disable remote
 
 Examples:
-  jot-note add "discussed project timeline with advisor — need to finish literature review by March 15"
-  jot-note search "diffusion models"
-  jot-note tags #research
-  jot-note insights
+  jot add "discussed project timeline with advisor — need to finish literature review by March 15"
+  jot search "diffusion models"
+  jot tags #research
+  jot insights
 
 Note: Analysis runs automatically when notes are added. Configure your backend in ~/.jot/config.json
     `);
@@ -265,7 +265,7 @@ Note: Analysis runs automatically when notes are added. Configure your backend i
       break;
     default:
       console.error(`Unknown command: ${command}`);
-      console.error('Run "jot-note help" for usage information.');
+      console.error('Run "jot help" for usage information.');
       process.exit(1);
   }
 }

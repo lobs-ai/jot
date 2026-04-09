@@ -21,7 +21,7 @@ export async function generateInsights(): Promise<Insights> {
       action_items: [],
       orphan_notes: [],
       research_threads: [],
-      suggestions: ['Add your first note with jot-note add "your thought"']
+      suggestions: ['Add your first note with jot add "your thought"']
     };
   }
 
