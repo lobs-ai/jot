@@ -2,7 +2,7 @@
 import { openDB, Note } from './db';
 import { runAnalysisCycle } from './analyzer';
 import { loadConfig, getConfigPath } from './config';
-import { generateInsights, generateDeepInsights, formatInsights } from './insights';
+import { generateInsights, generateDeepInsights, getStoredInsights, saveInsights, formatInsights } from './insights';
 
 const db = openDB();
 
@@ -149,17 +149,25 @@ async function cmdAnalyze(): Promise<void> {
 
 async function cmdInsights(): Promise<void> {
   try {
-    const insights = await generateInsights();
+    // Show stored insights instantly if available
+    const stored = getStoredInsights();
+    if (stored) {
+      console.log(formatInsights(stored));
+    } else {
+      const insights = await generateInsights();
+      console.log(formatInsights(insights));
+    }
     
-    // Fire off deep analysis in background, don't wait
+    // Always kick off fresh analysis in background, update stored when done
+    const baseInsights = await generateInsights();
     generateDeepInsights().then(deep => {
-      insights.research_threads = deep.research_threads;
-      insights.suggestions = deep.suggestions;
-      process.stdout.write('\n' + formatInsights(insights).replace('=== Jot Insights ===', '=== Jot Insights (updated) ==='));
+      baseInsights.research_threads = deep.research_threads;
+      baseInsights.suggestions = deep.suggestions;
+      saveInsights(baseInsights);
+      if (stored) {
+        process.stdout.write('\n' + formatInsights(baseInsights).replace('=== Jot Insights ===', '=== Jot Insights (updated) ==='));
+      }
     }).catch(() => {});
-    
-    // Show instant local insights immediately
-    console.log(formatInsights(insights));
   } catch (error) {
     console.error('Insights generation failed:', error);
     process.exit(1);

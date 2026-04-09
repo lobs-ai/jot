@@ -8,6 +8,7 @@ export interface Insights {
   orphan_notes: { id: string; content: string; created_at: string }[];
   research_threads: string[];
   suggestions: string[];
+  generated_at?: string;
 }
 
 function computeBasicInsights(): {
@@ -55,7 +56,6 @@ export async function generateInsights(): Promise<Insights> {
     }
   }
 
-  // Return instantly with local data only
   return {
     total_notes: basic.total_notes,
     tag_summary: basic.tag_summary,
@@ -151,6 +151,32 @@ Be concrete. If notes are trivial/empty, say so. No generic advice.`;
   }
 
   return { research_threads: [], suggestions: [] };
+}
+
+export function getStoredInsights(): Insights | null {
+  try {
+    const db = openDB();
+    const record = db.getLatestInsights();
+    if (record) {
+      const parsed = JSON.parse(record.insights_json);
+      return {
+        ...parsed,
+        generated_at: record.computed_at
+      };
+    }
+  } catch (e) {
+    // no stored insights
+  }
+  return null;
+}
+
+export function saveInsights(insights: Insights): void {
+  try {
+    const db = openDB();
+    db.saveInsights(JSON.stringify(insights));
+  } catch (e) {
+    // ignore
+  }
 }
 
 export function formatInsights(insights: Insights): string {
