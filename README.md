@@ -5,10 +5,10 @@
 ## What it does
 
 ```
-$ jot add "discussed switching from transformers to diffusion models with my advisor"
+$ jot-note add "discussed switching from transformers to diffusion models with my advisor"
 Jotted: a1b2c3d4
 
-$ jot summarize
+$ jot-note summarize
 
 === Jot Summary ===
 Total: 1 notes
@@ -25,13 +25,13 @@ Top tags:
 ## Architecture
 
 ```
-jot add "text"  →  SQLite (instant)
+jot-note add "text"  →  SQLite (instant)
                →  background worker → local model (LM Studio or Ollama)
                →  categorize, extract tags, link to related notes
 
-jot search "X"  →  SQLite full-text search
-jot tags #Y     →  filtered by tag
-jot summarize   →  aggregate stats, action items, tag cloud
+jot-note search "X"  →  SQLite full-text search
+jot-note tags #Y     →  filtered by tag
+jot-note summarize   →  aggregate stats, action items, tag cloud
 ```
 
 **Storage:** SQLite at `~/.jot/notes.db`  
@@ -70,13 +70,13 @@ Jot supports both LM Studio and Ollama. Configure in `~/.jot/config.json`:
 
 | Command | Description |
 |---------|-------------|
-| `jot add "text"` | Capture a note (instant save, async analysis) |
-| `jot search "query"` | Search notes by content |
-| `jot tags [#tag]` | List notes by tag, or show all tags |
-| `jot list [--raw]` | List all notes |
-| `jot summarize` | Summary: counts, top tags, action items |
-| `jot analyze` | Run analysis on unanalyzed notes |
-| `jot config` | Show current configuration |
+| `jot-note add "text"` | Capture a note (instant save, async analysis) |
+| `jot-note search "query"` | Search notes by content |
+| `jot-note tags [#tag]` | List notes by tag, or show all tags |
+| `jot-note list [--raw]` | List all notes |
+| `jot-note summarize` | Summary: counts, top tags, action items |
+| `jot-note analyze` | Run analysis on unanalyzed notes |
+| `jot-note config` | Show current configuration |
 | `jot help` | Show help |
 
 ## Setup
@@ -96,7 +96,7 @@ npm run build
 npm link
 
 # Start taking notes
-jot add "my first note"
+jot-note add "my first note"
 ```
 
 **Requires:** Node.js 18+  
