@@ -713,11 +713,19 @@ async function cmdAsk(args: string[]): Promise<void> {
   try {
     const answer = await callModelWithSession(systemPrompt, userPrompt, session);
 
+    // Parse JSON before writing to session — don't persist malformed output
+    const jsonStr = answer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    let parsed: { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] };
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      console.log('⚠ Could not parse model response as JSON. Saving to session anyway.');
+      parsed = {};
+    }
+
+    // Only persist to session if parse succeeded
     appendToSession(session, 'user', question);
     appendToSession(session, 'assistant', answer);
-
-    const jsonStr = answer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(jsonStr) as { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] };
 
     const { overdue_todos, patterns } = extractSurfaceableItems(parsed, openTodos);
     for (const id of overdue_todos) {
@@ -775,11 +783,19 @@ async function cmdChat(args: string[]): Promise<void> {
 
       try {
         const answer = await callModelWithSession(systemPrompt, userPrompt, session);
+
+        // Parse JSON before writing to session — don't persist malformed output
+        const jsonStr = answer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        let parsed: { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] };
+        try {
+          parsed = JSON.parse(jsonStr);
+        } catch {
+          parsed = {};
+        }
+
+        // Only persist to session if parse succeeded
         appendToSession(session, 'user', text);
         appendToSession(session, 'assistant', answer);
-
-        const jsonStr = answer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-        const parsed = JSON.parse(jsonStr) as { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] };
 
         const { overdue_todos, patterns } = extractSurfaceableItems(parsed, openTodos);
         for (const id of overdue_todos) {
