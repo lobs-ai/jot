@@ -1,0 +1,22 @@
+{
+  "name": "lobs-ai-jot",
+  "version": "0.1.0",
+  "description": "Local AI note-taking CLI. Capture notes, analyze with local model, search and summarize.",
+  "main": "dist/index.js",
+  "bin": {
+    "jot": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  }
+}
