@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { openDB, Note } from './db.js';
 import { runAnalysisCycle } from './analyzer.js';
 import { loadConfig, getConfigPath, saveConfig } from './config.js';
