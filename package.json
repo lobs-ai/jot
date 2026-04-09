@@ -4,7 +4,7 @@
   "description": "Local AI note-taking CLI. Capture notes, analyze with local model, search and summarize.",
   "main": "dist/index.js",
   "bin": {
-    "jot": "./dist/index.js"
+    "jot-note": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",

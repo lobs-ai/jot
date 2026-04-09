@@ -76,6 +76,57 @@ export function loadConfig(): Config {
   }
 }
 
+export function saveConfig(config: Config): void {
+  const configPath = getConfigPath();
+  const configDir = path.dirname(configPath);
+  
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+  
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+}
+
+export function setDefaultBackend(backend: 'lmstudio' | 'ollama'): Config {
+  const current = loadConfig();
+  current.defaultBackend = backend;
+  saveConfig(current);
+  return current;
+}
+
+export function setRemoteConfig(url: string, enabled: boolean = true): Config {
+  const current = loadConfig();
+  current.remote.enabled = enabled;
+  current.remote.url = url;
+  saveConfig(current);
+  return current;
+}
+
+export function disableRemote(): Config {
+  const current = loadConfig();
+  current.remote.enabled = false;
+  saveConfig(current);
+  return current;
+}
+
+export function setBackendModel(backend: 'lmstudio' | 'ollama', model: string): Config {
+  const current = loadConfig();
+  if (current.backends[backend]) {
+    current.backends[backend]!.model = model;
+  }
+  saveConfig(current);
+  return current;
+}
+
+export function setBackendUrl(backend: 'lmstudio' | 'ollama', url: string): Config {
+  const current = loadConfig();
+  if (current.backends[backend]) {
+    current.backends[backend]!.url = url;
+  }
+  saveConfig(current);
+  return current;
+}
+
 export function getActiveBackend(): { url: string; model: string } {
   const config = loadConfig();
   

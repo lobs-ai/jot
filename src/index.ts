@@ -28,7 +28,7 @@ function printNote(note: Note, showRaw = false): void {
 async function cmdAdd(args: string[]): Promise<void> {
   const content = args.join(' ');
   if (!content.trim()) {
-    console.error('Usage: jot add "your note here"');
+    console.error('Usage: jot-note add "your note here"');
     process.exit(1);
   }
 
@@ -45,7 +45,7 @@ async function cmdAdd(args: string[]): Promise<void> {
 async function cmdSearch(args: string[]): Promise<void> {
   const query = args.join(' ');
   if (!query.trim()) {
-    console.error('Usage: jot search "query"');
+    console.error('Usage: jot-note search "query"');
     process.exit(1);
   }
 
@@ -93,7 +93,7 @@ async function cmdTags(args: string[]): Promise<void> {
 async function cmdList(args: string[]): Promise<void> {
   const allNotes = db.getAllNotes();
   if (allNotes.length === 0) {
-    console.log('No notes yet. Try: jot add "your first note"');
+    console.log('No notes yet. Try: jot-note add "your first note"');
     return;
   }
 
@@ -166,17 +166,17 @@ async function main(): Promise<void> {
 
   if (!command || command === 'help' || command === '--help' || command === '-h') {
     console.log(`
-jot — Local AI Note-Taking CLI
+jot-note — Local AI Note-Taking CLI
 
 Usage:
-  jot add "your note here"     Capture a new note (instant save, async analysis)
-  jot search "query"            Search notes by content
-  jot tags [#tag]              List notes by tag, or show all tags
-  jot list [--raw]             List all notes
-  jot summarize                Summary of all notes (counts, tags, actions)
-  jot analyze                  Run analysis on unanalyzed notes
-  jot config                   Show current configuration
-  jot help                     Show this help
+  jot-note add "your note here"     Capture a new note (instant save, async analysis)
+  jot-note search "query"            Search notes by content
+  jot-note tags [#tag]              List notes by tag, or show all tags
+  jot-note list [--raw]             List all notes
+  jot-note summarize                Summary of all notes (counts, tags, actions)
+  jot-note analyze                  Run analysis on unanalyzed notes
+  jot-note config                   Show current configuration
+  jot-note help                     Show this help
 
 Configuration:
   Config file: ~/.jot/config.json
@@ -184,10 +184,10 @@ Configuration:
   Set remote.url to use a different machine's model API
 
 Examples:
-  jot add "discussed project timeline with advisor — need to finish literature review by March 15"
-  jot search "diffusion models"
-  jot tags #research
-  jot summarize
+  jot-note add "discussed project timeline with advisor — need to finish literature review by March 15"
+  jot-note search "diffusion models"
+  jot-note tags #research
+  jot-note summarize
 
 Note: Analysis runs automatically when notes are added. Configure your backend in ~/.jot/config.json
     `);
@@ -218,7 +218,7 @@ Note: Analysis runs automatically when notes are added. Configure your backend i
       break;
     default:
       console.error(`Unknown command: ${command}`);
-      console.error('Run "jot help" for usage information.');
+      console.error('Run "jot-note help" for usage information.');
       process.exit(1);
   }
 }
