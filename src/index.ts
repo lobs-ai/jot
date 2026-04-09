@@ -56,6 +56,40 @@ function buildAskFallback(question: string, notes: Note[], todos: Todo[]): strin
   return lines.join('\n');
 }
 
+function extractSurfaceableItems(parsed: { confirmed?: string[]; possible?: string[]; next_actions?: string[] }, openTodos: Todo[]): { overdue_todos: string[]; patterns: string[] } {
+  const overdue_todos: string[] = [];
+  const patterns: string[] = [];
+
+  const allItems = [
+    ...(parsed.confirmed || []),
+    ...(parsed.possible || []),
+    ...(parsed.next_actions || [])
+  ];
+
+  for (const item of allItems) {
+    const lower = item.toLowerCase();
+    if (lower.includes('overdue') || openTodos.some(t => t.content.toLowerCase().includes(item.toLowerCase().replace(/^you need to\s+/, '').replace(/^you should\s+/, '')))) {
+      const matched = openTodos.find(t => {
+        const normItem = item.toLowerCase().replace(/^you need to\s+/, '').replace(/^you should\s+/, '');
+        return t.content.toLowerCase().includes(normItem.slice(0, 20));
+      });
+      if (matched && !overdue_todos.some(id => matched.id.startsWith(id))) {
+        overdue_todos.push(matched.id);
+      }
+    }
+
+    const patternKeywords = ['pattern', 'habit', 'recurring', 'always', 'every time', 'noticed you'];
+    if (patternKeywords.some(kw => lower.includes(kw))) {
+      const normalized = item.replace(/^you (always|notice|have a habit|keep)/i, '').trim();
+      if (normalized && !patterns.includes(normalized)) {
+        patterns.push(normalized.slice(0, 100));
+      }
+    }
+  }
+
+  return { overdue_todos, patterns };
+}
+
 function formatAskAnswer(answer: { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] }): string {
   const normalizeAskItem = (value: string): string => value
     .toLowerCase()
@@ -687,6 +721,15 @@ async function cmdAsk(args: string[]): Promise<void> {
 
     const jsonStr = answer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const parsed = JSON.parse(jsonStr) as { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] };
+
+    const { overdue_todos, patterns } = extractSurfaceableItems(parsed, openTodos);
+    for (const id of overdue_todos) {
+      markSurfaced(session, 'overdue_todos', id);
+    }
+    for (const pattern of patterns) {
+      markSurfaced(session, 'patterns', pattern);
+    }
+
     console.log(formatAskAnswer(parsed) || buildAskFallback(question, notesForAnswer, openTodos));
   } catch (err) {
     console.log(buildAskFallback(question, notesForAnswer, openTodos));
@@ -740,6 +783,15 @@ async function cmdChat(args: string[]): Promise<void> {
 
         const jsonStr = answer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
         const parsed = JSON.parse(jsonStr) as { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] };
+
+        const { overdue_todos, patterns } = extractSurfaceableItems(parsed, openTodos);
+        for (const id of overdue_todos) {
+          markSurfaced(session, 'overdue_todos', id);
+        }
+        for (const pattern of patterns) {
+          markSurfaced(session, 'patterns', pattern);
+        }
+
         console.log('\nJot: ' + (formatAskAnswer(parsed) || buildAskFallback(text, notes, openTodos)).replace(/\n/g, '\nJot: '));
       } catch {
         console.log('\nJot: Sorry, I had trouble answering that.');

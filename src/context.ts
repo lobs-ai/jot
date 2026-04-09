@@ -163,6 +163,55 @@ export function updateUserFileSection(section: string, content: string): void {
   fs.writeFileSync(userPath, fileContent);
 }
 
+export interface UserPatch {
+  add_people?: string[];
+  add_projects?: string[];
+  add_priorities?: string[];
+}
+
+export function applyUserPatch(patch: UserPatch, confidence: number = 0.8): { applied: boolean; message?: string } {
+  if (confidence < 0.8) {
+    return { applied: false, message: 'Confidence too low for auto-apply' };
+  }
+
+  const context = readContext();
+  let changed = false;
+
+  if (patch.add_people?.length) {
+    for (const name of patch.add_people) {
+      if (!context.people.some(p => p.name.toLowerCase() === name.toLowerCase())) {
+        context.people.push({ name, context: '', relatedNotes: [] });
+        changed = true;
+      }
+    }
+  }
+
+  if (patch.add_projects?.length) {
+    for (const name of patch.add_projects) {
+      if (!context.projects.some(p => p.name.toLowerCase() === name.toLowerCase())) {
+        context.projects.push({ name, summary: '', relatedNotes: [], lastUpdated: new Date().toISOString() });
+        changed = true;
+      }
+    }
+  }
+
+  if (patch.add_priorities?.length) {
+    for (const priority of patch.add_priorities) {
+      if (!context.priorities.includes(priority)) {
+        context.priorities.push(priority);
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) {
+    saveContext(context);
+    return { applied: true };
+  }
+
+  return { applied: false };
+}
+
 export function readContext(): UserContext {
   const contextPath = getContextFilePath();
   if (!fs.existsSync(contextPath)) {

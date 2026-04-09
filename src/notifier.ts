@@ -5,6 +5,7 @@ export interface ProcessResult {
   actionItemsFound: string[];
   urgentItems: string[];
   staleNotes: string[];
+  patternItems: string[];
   summary: string;
 }
 
@@ -69,6 +70,14 @@ export class DiscordNotifier implements Notifier {
       });
     }
 
+    if (result.patternItems && result.patternItems.length > 0) {
+      fields.push({
+        name: 'Detected Patterns',
+        value: result.patternItems.slice(0, 5).map(p => `• ${p}`).join('\n'),
+        inline: false
+      });
+    }
+
     return {
       embeds: [{
         title: 'Jot Update',
@@ -97,6 +106,13 @@ export class TerminalNotifier implements Notifier {
     if (result.urgentItems.length > 0) {
       console.log(`\n⚠ ${result.urgentItems.length} urgent item(s):`);
       result.urgentItems.slice(0, 5).forEach((item, i) => {
+        console.log(`  ${i + 1}. ${item}`);
+      });
+    }
+    
+    if (result.patternItems && result.patternItems.length > 0) {
+      console.log(`\n🔁 ${result.patternItems.length} pattern(s) detected:`);
+      result.patternItems.slice(0, 5).forEach((item, i) => {
         console.log(`  ${i + 1}. ${item}`);
       });
     }

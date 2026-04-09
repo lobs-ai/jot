@@ -3,6 +3,12 @@ import { getActiveBackend } from './config.js';
 import { getContextPrompt, updateContextFromNote, readContext } from './context.js';
 import { getJotPersonaPrompt } from './prompting.js';
 
+export interface UserPatch {
+  add_people?: string[];
+  add_projects?: string[];
+  add_priorities?: string[];
+}
+
 export interface AnalyzeResult {
   tags: string[];
   action_items: string[];
@@ -10,6 +16,7 @@ export interface AnalyzeResult {
   projects?: string[];
   people?: string[];
   priorities?: string[];
+  userPatch?: UserPatch;
 }
 
 export async function analyzeNoteWithLocalModel(
@@ -34,12 +41,16 @@ Example output: {"tags": ["meeting", "research", "action-item"], "action_items":
 Another example: "looks like the diffusion model approach contradicts my earlier transformer hypothesis"
 Example output: {"tags": ["research", "contradiction"], "action_items": [], "linked_note_ids": [], "projects": ["EECS 545 research"], "people": [], "priorities": []}
 
+A third example: "every time I work on PAW auth I end up debugging for hours, this keeps happening"
+Example output: {"tags": ["pattern", "observation"], "action_items": [], "linked_note_ids": [], "projects": ["PAW"], "people": [], "priorities": [], "userPatch": {"add_priorities": ["PAW auth flow recurring issue"]}}
+
 Input notes may contain:
 - Action items (things to do, deadlines, commitments)
 - References to projects
 - References to people
 - Research topics or questions
 - Urgent matters
+- Patterns or recurring observations
 
 Return JSON with these fields only:
 - tags (array of lowercase strings, max 5)
@@ -47,7 +58,8 @@ Return JSON with these fields only:
 - linked_note_ids (array of strings - note IDs from related notes)
 - projects (array of strings - project names mentioned)
 - people (array of strings - people names mentioned)
-- priorities (array of strings - important items to follow up on)`;
+- priorities (array of strings - important items to follow up on)
+- userPatch (optional object with add_people, add_projects, add_priorities arrays for high-confidence learnings)`;
 
   const userPrompt = contextPrompt + '\n---\nNote to analyze:\n' + note.content + '\n\n---\nRelated notes:\n' + recentNotes;
 
@@ -115,6 +127,11 @@ Return JSON with these fields only:
     if (result.projects?.length > 0 || result.people?.length > 0 || result.priorities?.length > 0) {
       updateContextFromNote(note.id, result.projects || [], result.people || [], result.priorities || []);
     }
+
+    if (result.userPatch) {
+      const { applyUserPatch } = await import('./context.js');
+      applyUserPatch(result.userPatch, 0.8);
+    }
     
     return {
       tags: result.tags || [],
@@ -122,7 +139,8 @@ Return JSON with these fields only:
       linked_note_ids: result.linked_note_ids || [],
       projects: result.projects || [],
       people: result.people || [],
-      priorities: result.priorities || []
+      priorities: result.priorities || [],
+      userPatch: result.userPatch
     };
   } catch (error) {
     console.error('Local model analysis failed:', error);
