@@ -2,7 +2,7 @@
 import { openDB, Note } from './db';
 import { runAnalysisCycle } from './analyzer';
 import { loadConfig, getConfigPath } from './config';
-import { generateInsights, formatInsights } from './insights';
+import { generateInsights, getStoredInsights, formatInsights } from './insights';
 
 const db = openDB();
 
@@ -34,13 +34,10 @@ async function cmdAdd(args: string[]): Promise<void> {
   }
 
   const note = db.insertNote(content);
-  console.log(`Jotted: ${note.id.slice(0, 8)}`);
-  
-  runAnalysisCycle().then(({ processed }) => {
-    if (processed > 0) {
-      console.log(`Analysis complete: ${processed} notes categorized`);
-    }
-  }).catch(() => {});
+  console.log(`✓ Note saved (${note.id.slice(0, 8)}) — analysis happening in background`);
+
+  // Fire-and-forget: kick off analysis in background, don't await or log
+  runAnalysisCycle().catch(() => {});
 }
 
 async function cmdSearch(args: string[]): Promise<void> {
@@ -144,14 +141,19 @@ async function cmdAnalyze(): Promise<void> {
 }
 
 async function cmdInsights(): Promise<void> {
-  console.log('Generating insights...');
-  try {
-    const insights = await generateInsights();
-    console.log(formatInsights(insights));
-  } catch (error) {
-    console.error('Insights generation failed:', error);
-    process.exit(1);
+  // First, show any stored insights immediately
+  const stored = getStoredInsights();
+  if (stored) {
+    console.log(formatInsights(stored));
+    console.log('\n↻ Generating fresh insights in background...\n');
+  } else {
+    console.log('Generating insights... (this may take a moment)\n');
   }
+
+  // Kick off fresh analysis in background, don't wait
+  generateInsights().catch(err => {
+    console.error('Background insights generation failed:', err.message);
+  });
 }
 
 async function cmdConfig(args: string[]): Promise<void> {

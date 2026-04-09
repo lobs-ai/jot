@@ -14,6 +14,12 @@ export interface Note {
   analyzed_at: string | null;
 }
 
+export interface InsightsRecord {
+  id: number;
+  insights_json: string;
+  computed_at: string;
+}
+
 export interface DB {
   insertNote(content: string): Note;
   getNote(id: string): Note | undefined;
@@ -27,6 +33,8 @@ export interface DB {
     linked_note_ids: string[]
   ): void;
   markAnalyzed(id: string): void;
+  saveInsights(insights: string): void;
+  getLatestInsights(): InsightsRecord | undefined;
 }
 
 function getDBPath(): string {
@@ -51,6 +59,12 @@ function initDB(db: Database.Database): void {
     
     CREATE INDEX IF NOT EXISTS idx_notes_analyzed ON notes(analyzed);
     CREATE INDEX IF NOT EXISTS idx_notes_created ON notes(created_at);
+
+    CREATE TABLE IF NOT EXISTS insights (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      insights_json TEXT NOT NULL,
+      computed_at TEXT DEFAULT (datetime('now'))
+    );
   `);
 }
 
@@ -177,6 +191,18 @@ export function openDB(): DB {
         UPDATE notes SET analyzed = 1, analyzed_at = ? WHERE id = ?
       `);
       stmt.run(now, id);
+    },
+
+    saveInsights(insights: string): void {
+      const stmt = db.prepare(`
+        INSERT INTO insights (insights_json) VALUES (?)
+      `);
+      stmt.run(insights);
+    },
+
+    getLatestInsights(): InsightsRecord | undefined {
+      const stmt = db.prepare('SELECT * FROM insights ORDER BY id DESC LIMIT 1');
+      return stmt.get() as InsightsRecord | undefined;
     }
   };
 }
