@@ -177,8 +177,12 @@ async function cmdConfig(args: string[]): Promise<void> {
       console.error('Valid backends: lmstudio, ollama');
       process.exit(1);
     }
-    const config = loadConfig();
+    const config = require('./config').loadConfig();
     config.defaultBackend = backend;
+    // Enable the backend when switching to it
+    if (config.backends[backend]) {
+      config.backends[backend]!.enabled = true;
+    }
     require('./config').saveConfig(config);
     console.log(`Default backend set to ${backend}`);
     return;
@@ -215,6 +219,21 @@ async function cmdConfig(args: string[]): Promise<void> {
     return;
   }
 
+  if (args[0] === 'enable' && args[1]) {
+    const backend = args[1] as 'lmstudio' | 'ollama';
+    if (backend !== 'lmstudio' && backend !== 'ollama') {
+      console.error('Valid backends: lmstudio, ollama');
+      process.exit(1);
+    }
+    const config = require('./config').loadConfig();
+    if (config.backends[backend]) {
+      config.backends[backend]!.enabled = true;
+      require('./config').saveConfig(config);
+      console.log(`${backend} enabled`);
+    }
+    return;
+  }
+
   if (args[0] === 'url' && args[1]) {
     const url = args[1];
     const config = require('./config').loadConfig();
@@ -228,6 +247,7 @@ async function cmdConfig(args: string[]): Promise<void> {
 
   console.log('To edit config, open:', configPath);
   console.log('Usage: jot config backend lmstudio|ollama');
+  console.log('       jot config enable lmstudio|ollama');
   console.log('       jot config model <model-name>');
   console.log('       jot config model list');
   console.log('       jot config url <url>        Set API URL for current backend');
@@ -256,11 +276,8 @@ Usage:
 Configuration:
   jot config                   Show current config
   jot config backend lmstudio  Set default backend
-  jot config model <name>      Set model for current backend
-  jot config model list        Show current model
+  jot config enable lmstudio   Enable a backend
   jot config remote <url>      Enable remote model endpoint
-  jot config model <name>      Set model for current backend
-  jot config model list        Show current model
   jot config remote off        Disable remote
 
 Examples:

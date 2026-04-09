@@ -136,7 +136,16 @@ export function getActiveBackend(): { url: string; model: string } {
   
   const backend = config.backends[config.defaultBackend];
   if (!backend?.enabled) {
-    throw new Error(`Backend ${config.defaultBackend} is not enabled. Check your config at ${getConfigPath()}`);
+    // Fall back to the first enabled backend
+    const lmstudio = config.backends.lmstudio;
+    const ollama = config.backends.ollama;
+    if (lmstudio?.enabled) {
+      return { url: lmstudio.url, model: lmstudio.model };
+    }
+    if (ollama?.enabled) {
+      return { url: ollama.url, model: ollama.model };
+    }
+    throw new Error(`No enabled backend found. Check your config at ${getConfigPath()}`);
   }
   
   return { url: backend.url, model: backend.model };
