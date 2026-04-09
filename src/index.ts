@@ -723,7 +723,7 @@ async function cmdAsk(args: string[]): Promise<void> {
       parsed = {};
     }
 
-    // Only persist to session if parse succeeded
+    // Persist to session (parse failure is graceful — raw answer still saved)
     appendToSession(session, 'user', question);
     appendToSession(session, 'assistant', answer);
 
@@ -793,7 +793,7 @@ async function cmdChat(args: string[]): Promise<void> {
           parsed = {};
         }
 
-        // Only persist to session if parse succeeded
+        // Persist to session (parse failure is graceful — raw answer still saved)
         appendToSession(session, 'user', text);
         appendToSession(session, 'assistant', answer);
 
