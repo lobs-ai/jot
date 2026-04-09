@@ -11,7 +11,14 @@
 
 ---
 
-## Architecture Layers
+## Core Design Principles
+
+1. **Zero-config startup** — runs out of the box with Google credentials, no manual setup
+2. **Zero management** — the agent handles all its own data. You never run migration scripts, clear sessions, or manage memory. Everything happens automatically in the background.
+3. **Continuous learning** — agent reads notes passively, builds mental model of user over time
+4. **Proactive assistance** — surfaces relevant info, doesn't wait to be asked
+5. **Privacy first** — all data stored locally, no external services beyond Google APIs
+6. **Agent-native** — not a "summarize my inbox" tool. Jot has memories, tracks goals, understands context, and actively helps achieve objectives. It reasons about the user's world continuously.
 
 ```
 Layer 1 — Core CLI
@@ -273,13 +280,13 @@ interface SessionMessage {
 
 - **Named sessions:** `jot ask --session work` — loads/writes `~/.jot/sessions/work.json`
 
-### CLI Commands
+### Automated Maintenance
 
-```
-jot sessions list          ← show all sessions, message count, last_updated
-jot sessions clear          ← wipe default session
-jot sessions clear work     ← wipe named session
-```
+Session storage is fully automatic — no user-facing management commands:
+
+- Old messages trimmed from active session and archived to `sessions/archive/` automatically
+- Session context persists across `jot ask` calls without any explicit management
+- Sessions never need to be "cleared" — old context naturally fades as the conversation evolves
 
 ### Prompt Injection
 
@@ -406,14 +413,9 @@ The current `createUserFile()` creates a single-section format:
 Last updated: 2026-04-09
 ```
 
-### Migration Script
+### Initialization
 
-`jot migrate user-md`:
-- Reads existing `~/.jot/user.md`
-- Preserves any non-empty content from each section
-- Wraps empty sections as placeholders under `# Rafe's Profile`
-- Adds existing non-empty content under `# Auto-learned`
-- Backs up original as `~/.jot/user.md.bak`
+On first run, agent creates `~/.jot/user.md` in the two-section format directly. No migration needed — agent never writes in the old format.
 
 ### Two-Section Format
 
