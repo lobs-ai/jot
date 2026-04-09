@@ -46,7 +46,9 @@ Layer 5 — Todo System
   notes.db           SQLite — notes, tags, action items, projects, people
   todos.db           SQLite — todos with due dates, priorities
   context.json       Learned memory (projects, people, patterns)
-  user.md            User context (auto-learned sections)
+  user.md            User context (two-section: profile + auto-learned)
+  sessions/
+    default.json    Session history for chat/ask carryover
   config.json        Backends, URLs, notifier config
   google-config.json Google integration settings
   credentials/       Google OAuth/service account credentials
@@ -227,6 +229,184 @@ jot context calendar --week                  Read upcoming calendar events
 ### Not Yet Implemented
 - Calendar write (Layer 5)
 - Agent scheduling on non-macOS platforms
+
+---
+
+## Phase 1: Session Storage + Carryover
+
+**Goal:** `jot ask` remembers the conversation. Multi-turn context without a running REPL.
+
+### Session File Structure
+
+```
+~/.jot/sessions/
+  default.json    ← current/primary session
+  work.json       ← optional named sessions
+```
+
+```typescript
+interface Session {
+  id: string;
+  name: string;
+  messages: SessionMessage[];
+  created_at: string;
+  last_updated: string;
+}
+
+interface SessionMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+```
+
+### Behavior
+
+- **On every `jot ask` call:**
+  1. Load `~/.jot/sessions/default.json` (create if missing)
+  2. Append `{role: 'user', content: question, timestamp}` to messages
+  3. Inject last 8 messages into the prompt (system + user alternation)
+  4. Append `{role: 'assistant', content: answer, timestamp}` after response
+  5. Trim to max 20 messages total (configurable)
+  6. Save session file
+
+- **Named sessions:** `jot ask --session work` — loads/writes `~/.jot/sessions/work.json`
+
+### CLI Commands
+
+```
+jot sessions list          ← show all sessions, message count, last_updated
+jot sessions clear          ← wipe default session
+jot sessions clear work     ← wipe named session
+```
+
+### Prompt Injection
+
+Conversation history injected into `getAskSystemPrompt()` context block:
+
+```
+## Conversation History
+[user]: what's my status?
+[assistant]: You have 3 active projects: PAW, research, and candidacy prep...
+[user]: what about research?
+[assistant]: ...
+```
+
+Last 8 messages max (configurable via `session.maxHistory` in config.json).
+
+### Surfaced Items Tracking
+
+Session state also tracks what has been surfaced to avoid repetition:
+
+```typescript
+interface Session {
+  // ... above
+  surfaced: {
+    overdue_todos: string[];  // IDs already notified this session
+    stale_projects: string[]; // projects already flagged this session
+    patterns: string[];       // patterns already mentioned
+  };
+}
+```
+
+The agent references `surfaced` to avoid re-surfacing the same items within a session.
+
+---
+
+## Phase 2: Interactive Chat REPL
+
+**Goal:** `jot chat` — persistent REPL that accumulates context across a session.
+
+- Built on top of Phase 1 session storage
+- Interactive readline loop: `jot chat` enters conversation mode
+- Ctrl+C or `exit` to end session
+- Each turn appends to session, saves on exit
+- Optionally: `--model` flag to switch backend mid-session
+- Optionally: `--system` flag to inject custom system prompt
+
+---
+
+## Phase 3: Proactive Daemon Enhancements
+
+**Goal:** The daemon doesn't just react — it reasons about patterns and surfaces proactively.
+
+### Surfaced Tracking (Persistent)
+
+```typescript
+// ~/.jot/surfaced.json
+interface SurfacedTracker {
+  overdue_todos: string[];     // IDs, cleared when resolved
+  stale_projects: string[];     // project names, re-checks after 7 days
+  patterns: string[];          // pattern names, never auto-repeats
+  last_surfaces: {
+    [key: string]: string;      // item → last_surface_date
+  };
+}
+```
+
+- `stale threshold` in days (default: 14) — project untouched → flag once per surface period
+- `surfaced` entries cleared when the item is resolved or updated
+- Daemon references surfaced tracker before including an item in notification
+
+### Proactive Rules
+
+1. **Stale projects:** If project.lastUpdated > 14 days ago → surface once, then wait 7 days before surfacing again
+2. **Overdue todos:** Surface once per session (don't spam every cycle)
+3. **Pattern detection:** Surface once per session, never again without user prompt
+4. **New insights:** If analyzer finds a new pattern → surface in next notification
+
+---
+
+## Phase 4: user.md Migration
+
+**Goal:** Migrate existing `user.md` to two-section format with clear ownership boundaries.
+
+### Two-Section Format
+
+```markdown
+# Rafe's Profile
+Name: Rafe
+Role: UMich CSE MS student
+Goals: PhD, make money, build best agentic system
+Commitments: [your stuff here]
+
+# Auto-learned (Jot maintains this)
+
+People: Dr. Chen (advisor, 2026-04-06)
+Projects: Jot (personal note assistant, 2026-04-09)
+Priorities: PAW auth flow (2026-04-09)
+```
+
+### Migration
+
+`jot migrate user-md` — one-time migration:
+- Reads existing `~/.jot/user.md`
+- Extracts non-placeholder content into `# Auto-learned`
+- Wraps skeleton placeholders under `# Rafe's Profile`
+- Writes new format, backs up original as `user.md.bak`
+
+### Auto-Update Rules
+
+- High confidence (>0.8): apply patch silently to `# Auto-learned`
+- Low confidence (<0.8): ask first — "I noticed you mentioned 'X', should I add it?"
+- Never auto-write to `# Rafe's Profile` — suggestions only, user approves
+- Approval signals train the model over time
+
+### Patch Format
+
+Analyzer returns patch alongside tags/actions:
+
+```json
+{
+  "tags": ["meeting", "advisor"],
+  "actions": [{"content": "email Dr. Chen", "priority": "high"}],
+  "userPatch": {
+    "add_people": ["Dr. Smith"],
+    "add_projects": ["candidacy exam prep"],
+    "add_priorities": ["prepare candidacy talk"]
+  }
+}
+```
 
 ---
 
