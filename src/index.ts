@@ -2,7 +2,7 @@
 import { openDB, Note } from './db';
 import { runAnalysisCycle } from './analyzer';
 import { loadConfig, getConfigPath } from './config';
-import { generateInsights, getStoredInsights, formatInsights } from './insights';
+import { generateInsights, generateDeepInsights, formatInsights } from './insights';
 
 const db = openDB();
 
@@ -34,10 +34,13 @@ async function cmdAdd(args: string[]): Promise<void> {
   }
 
   const note = db.insertNote(content);
-  console.log(`✓ Note saved (${note.id.slice(0, 8)}) — analysis happening in background`);
-
-  // Fire-and-forget: kick off analysis in background, don't await or log
-  runAnalysisCycle().catch(() => {});
+  console.log(`Jotted: ${note.id.slice(0, 8)}`);
+  
+  runAnalysisCycle().then(({ processed }) => {
+    if (processed > 0) {
+      console.log(`Analysis complete: ${processed} notes categorized`);
+    }
+  }).catch(() => {});
 }
 
 async function cmdSearch(args: string[]): Promise<void> {
@@ -69,46 +72,49 @@ async function cmdTags(args: string[]): Promise<void> {
         tagMap.get(t)!.push(note);
       });
     });
-
-    console.log('Notes by tag:');
-    tagMap.forEach((notes, t) => {
-      console.log(`\n#${t} (${notes.length}):`);
-      notes.forEach(n => console.log(`  - ${n.content.slice(0, 60)}${n.content.length > 60 ? '...' : ''}`));
+    
+    const sorted = [...tagMap.entries()].sort((a, b) => b[1].length - a[1].length);
+    console.log(`\n=== ${allNotes.length} notes across ${tagMap.size} tags ===`);
+    sorted.forEach(([tag, notes]) => {
+      console.log(`  #${tag}: ${notes.length} note(s)`);
     });
-    return;
+  } else {
+    const notes = db.getNotesByTag(tag);
+    if (notes.length === 0) {
+      console.log(`No notes found with tag #${tag}`);
+      return;
+    }
+    console.log(`Found ${notes.length} note(s) with #${tag}:`);
+    notes.forEach(note => printNote(note));
   }
-
-  const notes = db.getNotesByTag(tag);
-  if (notes.length === 0) {
-    console.log(`No notes tagged with #${tag}`);
-    return;
-  }
-
-  console.log(`Notes tagged #${tag}:`);
-  notes.forEach(note => printNote(note));
 }
 
 async function cmdList(args: string[]): Promise<void> {
   const allNotes = db.getAllNotes();
   if (allNotes.length === 0) {
-    console.log('No notes yet. Try: jot add "your first note"');
+    console.log('No notes yet. Add your first note with jot add "your thought"');
     return;
   }
 
-  console.log(`${allNotes.length} note(s):`);
   const showRaw = args.includes('--raw');
+  console.log(`\n=== ${allNotes.length} note(s) ===`);
   allNotes.forEach(note => printNote(note, showRaw));
 }
 
-async function cmdSummarize(args: string[]): Promise<void> {
+async function cmdSummarize(): Promise<void> {
   const allNotes = db.getAllNotes();
+  
   if (allNotes.length === 0) {
     console.log('No notes to summarize.');
     return;
   }
 
   const now = new Date();
-  const today = allNotes.filter(n => new Date(n.created_at) > new Date(now.getTime() - 86400000));
+  const today = allNotes.filter(n => {
+    const d = new Date(n.created_at);
+    return d.toDateString() === now.toDateString();
+  });
+
   const thisWeek = allNotes.filter(n => {
     const d = new Date(n.created_at);
     return d > new Date(now.getTime() - 7 * 86400000) && d <= new Date(now.getTime() - 86400000);
@@ -129,31 +135,35 @@ async function cmdSummarize(args: string[]): Promise<void> {
 
   const actionItems = allNotes.flatMap(n => n.action_items).filter(Boolean);
   if (actionItems.length > 0) {
-    console.log(`\n${actionItems.length} action item(s) found:`);
-    actionItems.forEach((item, i) => console.log(`  ${i + 1}. ${item}`));
+    console.log(`\n${actionItems.length} action item(s):`);
+    actionItems.slice(0, 5).forEach((item, i) => console.log(`  ${i + 1}. ${item}`));
   }
+
+  console.log(`\nSee 'jot insights' for deep analysis.`);
 }
 
 async function cmdAnalyze(): Promise<void> {
-  console.log('Running analysis on unanalyzed notes...');
   const { processed, failed } = await runAnalysisCycle();
   console.log(`Analysis complete: ${processed} processed, ${failed} skipped`);
 }
 
 async function cmdInsights(): Promise<void> {
-  // First, show any stored insights immediately
-  const stored = getStoredInsights();
-  if (stored) {
-    console.log(formatInsights(stored));
-    console.log('\n↻ Generating fresh insights in background...\n');
-  } else {
-    console.log('Generating insights... (this may take a moment)\n');
+  try {
+    const insights = await generateInsights();
+    
+    // Fire off deep analysis in background, don't wait
+    generateDeepInsights().then(deep => {
+      insights.research_threads = deep.research_threads;
+      insights.suggestions = deep.suggestions;
+      process.stdout.write('\n' + formatInsights(insights).replace('=== Jot Insights ===', '=== Jot Insights (updated) ==='));
+    }).catch(() => {});
+    
+    // Show instant local insights immediately
+    console.log(formatInsights(insights));
+  } catch (error) {
+    console.error('Insights generation failed:', error);
+    process.exit(1);
   }
-
-  // Kick off fresh analysis in background, don't wait
-  generateInsights().catch(err => {
-    console.error('Background insights generation failed:', err.message);
-  });
 }
 
 async function cmdConfig(args: string[]): Promise<void> {
@@ -161,171 +171,197 @@ async function cmdConfig(args: string[]): Promise<void> {
   
   if (args.length === 0) {
     const config = loadConfig();
+
     console.log(`\n=== Jot Config ===`);
     console.log(`Config file: ${configPath}`);
     console.log(`Default backend: ${config.defaultBackend}`);
     console.log(`\nBackends:`);
-    Object.entries(config.backends).forEach(([name, backend]) => {
-      console.log(`  ${name}: ${backend.enabled ? 'enabled' : 'disabled'} at ${backend.url} (model: ${backend.model})`);
-    });
-    console.log(`\nRemote: ${config.remote.enabled ? 'enabled at ' + config.remote.url : 'disabled'}`);
-    return;
-  }
 
-  // Handle specific config updates
-  if (args[0] === 'backend' && args[1]) {
-    const backend = args[1] as 'lmstudio' | 'ollama';
-    if (backend !== 'lmstudio' && backend !== 'ollama') {
-      console.error('Valid backends: lmstudio, ollama');
-      process.exit(1);
+    for (const [name, backend] of Object.entries(config.backends)) {
+      if (backend) {
+        console.log(`  ${name}:`);
+        console.log(`    URL: ${backend.url}`);
+        console.log(`    Model: ${backend.model}`);
+        console.log(`    Enabled: ${backend.enabled}`);
+        if (backend.apiType) {
+          console.log(`    API: ${backend.apiType}`);
+        }
+      }
     }
-    const config = require('./config').loadConfig();
-    config.defaultBackend = backend;
-    // Enable the backend when switching to it
-    if (config.backends[backend]) {
-      config.backends[backend]!.enabled = true;
+
+    if (config.remote.enabled) {
+      console.log(`\nRemote: ${config.remote.url}`);
+    } else {
+      console.log(`\nRemote: disabled`);
     }
-    require('./config').saveConfig(config);
-    console.log(`Default backend set to ${backend}`);
+
+    console.log(`\nNote: Edit ${configPath} directly to change advanced settings.`);
     return;
   }
 
-  if (args[0] === 'remote' && args[1]) {
-    const url = args[1];
-    const config = require('./config').setRemoteConfig(url);
-    console.log(`Remote enabled at ${url}`);
-    return;
-  }
-
-  if (args[0] === 'remote' && args[1] === 'off') {
-    require('./config').disableRemote();
-    console.log('Remote disabled');
-    return;
-  }
-
-  if (args[0] === 'model' && args[1]) {
-    const model = args[1];
-    const config = require('./config').loadConfig();
-    if (config.backends[config.defaultBackend]) {
-      config.backends[config.defaultBackend]!.model = model;
-      require('./config').saveConfig(config);
-      console.log(`Model set to ${model} for ${config.defaultBackend}`);
-    }
-    return;
-  }
-
-  if (args[0] === 'model' && args[1] === 'list') {
-    const config = require('./config').loadConfig();
+  const subcmd = args[0];
+  
+  if (subcmd === 'url' && args.length >= 2) {
+    const url = args.slice(1).join(' ');
+    const config = loadConfig();
     const backend = config.backends[config.defaultBackend];
-    console.log(`Current model for ${config.defaultBackend}: ${backend?.model}`);
+    if (backend) {
+      backend.url = url;
+      console.log(`Set ${config.defaultBackend} URL to: ${url}`);
+    }
     return;
   }
-
-  if (args[0] === 'enable' && args[1]) {
-    const backend = args[1] as 'lmstudio' | 'ollama';
-    if (backend !== 'lmstudio' && backend !== 'ollama') {
-      console.error('Valid backends: lmstudio, ollama');
+  
+  if (subcmd === 'model' && args.length >= 2) {
+    const model = args.slice(1).join(' ');
+    const config = loadConfig();
+    const backend = config.backends[config.defaultBackend];
+    if (backend) {
+      backend.model = model;
+      console.log(`Set ${config.defaultBackend} model to: ${model}`);
+    }
+    return;
+  }
+  
+  if (subcmd === 'backend' && args.length >= 2) {
+    const backendName = args[1] as 'lmstudio' | 'ollama';
+    if (backendName !== 'lmstudio' && backendName !== 'ollama') {
+      console.error('Invalid backend. Use "lmstudio" or "ollama".');
       process.exit(1);
     }
-    const config = require('./config').loadConfig();
-    if (config.backends[backend]) {
-      config.backends[backend]!.enabled = true;
-      require('./config').saveConfig(config);
-      console.log(`${backend} enabled`);
+    const config = loadConfig();
+    const backend = config.backends[backendName];
+    if (!backend) {
+      console.error(`Backend ${backendName} not found in config.`);
+      process.exit(1);
+    }
+    backend.enabled = true;
+    config.defaultBackend = backendName;
+    console.log(`Switched to ${backendName}. URL: ${backend.url} | Model: ${backend.model}`);
+    return;
+  }
+
+  if (subcmd === 'enable' && args.length >= 2) {
+    const backendName = args[1] as 'lmstudio' | 'ollama';
+    if (backendName !== 'lmstudio' && backendName !== 'ollama') {
+      console.error('Invalid backend. Use "lmstudio" or "ollama".');
+      process.exit(1);
+    }
+    const config = loadConfig();
+    if (config.backends[backendName]) {
+      config.backends[backendName]!.enabled = true;
+      console.log(`Enabled ${backendName}`);
     }
     return;
   }
 
-  if (args[0] === 'url' && args[1]) {
-    const url = args[1];
-    const config = require('./config').loadConfig();
-    if (config.backends[config.defaultBackend]) {
-      config.backends[config.defaultBackend]!.url = url;
-      require('./config').saveConfig(config);
-      console.log(`URL set to ${url} for ${config.defaultBackend}`);
-    }
-    return;
-  }
-
-  console.log('To edit config, open:', configPath);
-  console.log('Usage: jot config backend lmstudio|ollama');
-  console.log('       jot config enable lmstudio|ollama');
-  console.log('       jot config model <model-name>');
-  console.log('       jot config model list');
-  console.log('       jot config url <url>        Set API URL for current backend');
-  console.log('       jot config remote <url>');
-  console.log('       jot config remote off');
+  console.error(`Unknown config subcommand: ${subcmd}`);
+  console.error('Usage: jot config [url <url>|model <name>|backend <lmstudio|ollama>|enable <lmstudio|ollama>]');
+  process.exit(1);
 }
 
-async function main(): Promise<void> {
-  const [,, command, ...args] = process.argv;
+async function cmdInit(): Promise<void> {
+  const fs = require('fs');
+  const configPath = getConfigPath();
+  const configDir = require('path').dirname(configPath);
+  
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+  
+  const config = loadConfig();
+  console.log(`Jot initialized at ${configPath}`);
+  console.log(`Default backend: ${config.defaultBackend}`);
+  console.log(`\nEdit the config file to change settings.`);
+}
 
-  if (!command || command === 'help' || command === '--help' || command === '-h') {
-    console.log(`
-jot — Local AI Note-Taking CLI
+// CLI routing
+const [cmd, ...args] = process.argv.slice(2);
 
-Usage:
-  jot add "your note here"     Capture a new note (instant save, async analysis)
-  jot search "query"            Search notes by content
-  jot tags [#tag]              List notes by tag, or show all tags
-  jot list [--raw]             List all notes
-  jot summarize                Summary of all notes (counts, tags, actions)
-  jot analyze                  Run analysis on unanalyzed notes
-  jot insights                 Generate corpus-level insights and trends
-  jot config [key] [value]     Show or update configuration
-  jot help                     Show this help
+if (!cmd) {
+  console.log(`Jot - local AI note-taking CLI
 
-Configuration:
-  jot config                   Show current config
-  jot config backend lmstudio  Set default backend
-  jot config enable lmstudio   Enable a backend
-  jot config remote <url>      Enable remote model endpoint
-  jot config remote off        Disable remote
+Usage: jot <command> [options]
+
+Commands:
+  jot add "note content"       Add a new note
+  jot search "query"          Search notes
+  jot list                     List all notes
+  jot tags [tag]               List tags or filter by tag
+  jot summarize                Quick summary
+  jot analyze                 Run analysis on unanalyzed notes
+  jot insights                 Deep corpus analysis (AI-powered)
+  jot config [url|model|backend|enable] [args]  View or update config
+  jot init                     Initialize jot directory
 
 Examples:
-  jot add "discussed project timeline with advisor — need to finish literature review by March 15"
-  jot search "diffusion models"
-  jot tags #research
+  jot add "meeting with advisor about project timeline"
+  jot search "meeting"
+  jot tags
   jot insights
 
-Note: Analysis runs automatically when notes are added. Configure your backend in ~/.jot/config.json
-    `);
-    return;
-  }
-
-  switch (command) {
-    case 'add':
-      await cmdAdd(args);
-      break;
-    case 'search':
-      await cmdSearch(args);
-      break;
-    case 'tags':
-      await cmdTags(args);
-      break;
-    case 'list':
-      await cmdList(args);
-      break;
-    case 'summarize':
-      await cmdSummarize(args);
-      break;
-    case 'analyze':
-      await cmdAnalyze();
-      break;
-    case 'insights':
-      await cmdInsights();
-      break;
-    case 'config':
-      await cmdConfig(args);
-      break;
-    default:
-      console.error(`Unknown command: ${command}`);
-      console.error('Run "jot help" for usage information.');
-      process.exit(1);
-  }
+Config location: ~/.jot/config.json
+Data location: ~/.jot/notes.db`);
+  process.exit(0);
 }
 
-main().catch(err => {
-  console.error('Error:', err.message);
-  process.exit(1);
-});
+switch (cmd) {
+  case 'add':
+    cmdAdd(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'search':
+    cmdSearch(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'list':
+    cmdList(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'tags':
+    cmdTags(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'summarize':
+    cmdSummarize().catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'analyze':
+    cmdAnalyze().catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'insights':
+    cmdInsights().catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'config':
+    cmdConfig(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'init':
+    cmdInit().catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  default:
+    console.error(`Unknown command: ${cmd}`);
+    console.error('Run jot with no arguments for help.');
+    process.exit(1);
+}
