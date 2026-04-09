@@ -472,7 +472,7 @@ if (!cmd) {
 Usage: jot <command> [options]
 
 Commands:
-  jot add "note content"       Add a new note
+  jot note "content"           Add a new note
   jot edit <id> "content"      Edit a note
   jot delete <id> [--force]    Delete a note
   jot archive <id> [--unarchive]  Archive or restore a note
@@ -507,7 +507,7 @@ Data location: ~/.jot/notes.db`);
 }
 
 switch (cmd) {
-  case 'add':
+  case 'note':
     cmdAdd(args).catch(err => {
       console.error('Error:', err.message);
       process.exit(1);
