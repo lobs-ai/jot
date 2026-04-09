@@ -29,13 +29,13 @@ export interface Config {
 const DEFAULT_CONFIG: Config = {
   backends: {
     lmstudio: {
-      url: 'http://localhost:1234/v1/chat/completions',
+      url: 'http://127.0.0.1:1234/v1/chat/completions',
       model: 'qwen3.5-9b',
       enabled: true,
       apiType: 'openai'
     },
     ollama: {
-      url: 'http://localhost:11434/v1/chat/completions',
+      url: 'http://127.0.0.1:11434/v1/chat/completions',
       model: 'gemma4:e4b',
       enabled: false,
       apiType: 'openai'
