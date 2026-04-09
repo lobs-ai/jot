@@ -268,7 +268,8 @@ interface SessionMessage {
   3. Inject last 8 messages into the prompt (system + user alternation)
   4. Append `{role: 'assistant', content: answer, timestamp}` after response
   5. Trim to max 20 messages total (configurable)
-  6. Save session file
+  6. **Archive trimmed messages** to `sessions/archive/default.jsonl` (newline-delimited JSON, append-only)
+  7. Save session file
 
 - **Named sessions:** `jot ask --session work` — loads/writes `~/.jot/sessions/work.json`
 
@@ -296,7 +297,7 @@ Last 8 messages max (configurable via `session.maxHistory` in config.json).
 
 ### Surfaced Items Tracking
 
-Session state also tracks what has been surfaced to avoid repetition:
+**Per-session** (Phase 1): The session tracks what it's already surfaced to avoid repetition within a session:
 
 ```typescript
 interface Session {
@@ -309,7 +310,23 @@ interface Session {
 }
 ```
 
-The agent references `surfaced` to avoid re-surfacing the same items within a session.
+**Persistent** (Phase 3): A global surfaced tracker survives session clears:
+
+```
+~/.jot/surfaced.json
+```
+
+```typescript
+interface GlobalSurfacedTracker {
+  overdue_todos: string[];     // IDs, cleared when resolved
+  stale_projects: {
+    [name: string]: string;    // project name → last_surface_date (ISO)
+  };
+  patterns: string[];          // pattern names, never auto-repeats
+  stale_threshold_days: number; // default: 14
+  recheck_after_days: number;  // default: 7
+}
+```
 
 ---
 
@@ -359,7 +376,44 @@ interface SurfacedTracker {
 
 ## Phase 4: user.md Migration
 
-**Goal:** Migrate existing `user.md` to two-section format with clear ownership boundaries.
+**Goal:** Migrate existing `user.md` to two-section format. Must not lose existing content.
+
+### Pre-existing user.md Format
+
+The current `createUserFile()` creates a single-section format:
+
+```markdown
+# User Context
+
+## High Priority
+- 
+
+## Projects
+- 
+
+## People
+- 
+
+## Ongoing
+- 
+
+## Notes
+- 
+
+## Patterns
+- 
+
+Last updated: 2026-04-09
+```
+
+### Migration Script
+
+`jot migrate user-md`:
+- Reads existing `~/.jot/user.md`
+- Preserves any non-empty content from each section
+- Wraps empty sections as placeholders under `# Rafe's Profile`
+- Adds existing non-empty content under `# Auto-learned`
+- Backs up original as `~/.jot/user.md.bak`
 
 ### Two-Section Format
 
