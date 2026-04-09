@@ -2,6 +2,7 @@
 import { openDB, Note } from './db';
 import { runAnalysisCycle } from './analyzer';
 import { loadConfig, getConfigPath } from './config';
+import { generateInsights, formatInsights } from './insights';
 
 const db = openDB();
 
@@ -142,6 +143,17 @@ async function cmdAnalyze(): Promise<void> {
   console.log(`Analysis complete: ${processed} processed, ${failed} skipped`);
 }
 
+async function cmdInsights(): Promise<void> {
+  console.log('Generating insights...');
+  try {
+    const insights = await generateInsights();
+    console.log(formatInsights(insights));
+  } catch (error) {
+    console.error('Insights generation failed:', error);
+    process.exit(1);
+  }
+}
+
 async function cmdConfig(args: string[]): Promise<void> {
   const configPath = getConfigPath();
   
@@ -158,7 +170,37 @@ async function cmdConfig(args: string[]): Promise<void> {
     return;
   }
 
+  // Handle specific config updates
+  if (args[0] === 'backend' && args[1]) {
+    const backend = args[1] as 'lmstudio' | 'ollama';
+    if (backend !== 'lmstudio' && backend !== 'ollama') {
+      console.error('Valid backends: lmstudio, ollama');
+      process.exit(1);
+    }
+    const config = loadConfig();
+    config.defaultBackend = backend;
+    require('./config').saveConfig(config);
+    console.log(`Default backend set to ${backend}`);
+    return;
+  }
+
+  if (args[0] === 'remote' && args[1]) {
+    const url = args[1];
+    const config = require('./config').setRemoteConfig(url);
+    console.log(`Remote enabled at ${url}`);
+    return;
+  }
+
+  if (args[0] === 'remote' && args[1] === 'off') {
+    require('./config').disableRemote();
+    console.log('Remote disabled');
+    return;
+  }
+
   console.log('To edit config, open:', configPath);
+  console.log('Usage: jot-note config backend lmstudio|ollama');
+  console.log('       jot-note config remote <url>');
+  console.log('       jot-note config remote off');
 }
 
 async function main(): Promise<void> {
@@ -175,19 +217,21 @@ Usage:
   jot-note list [--raw]             List all notes
   jot-note summarize                Summary of all notes (counts, tags, actions)
   jot-note analyze                  Run analysis on unanalyzed notes
-  jot-note config                   Show current configuration
+  jot-note insights                 Generate corpus-level insights and trends
+  jot-note config [key] [value]     Show or update configuration
   jot-note help                     Show this help
 
 Configuration:
-  Config file: ~/.jot/config.json
-  Supports LM Studio and Ollama backends
-  Set remote.url to use a different machine's model API
+  jot-note config                   Show current config
+  jot-note config backend lmstudio  Set default backend
+  jot-note config remote <url>      Enable remote model endpoint
+  jot-note config remote off         Disable remote
 
 Examples:
   jot-note add "discussed project timeline with advisor — need to finish literature review by March 15"
   jot-note search "diffusion models"
   jot-note tags #research
-  jot-note summarize
+  jot-note insights
 
 Note: Analysis runs automatically when notes are added. Configure your backend in ~/.jot/config.json
     `);
@@ -212,6 +256,9 @@ Note: Analysis runs automatically when notes are added. Configure your backend i
       break;
     case 'analyze':
       await cmdAnalyze();
+      break;
+    case 'insights':
+      await cmdInsights();
       break;
     case 'config':
       await cmdConfig(args);
