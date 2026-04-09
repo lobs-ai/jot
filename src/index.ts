@@ -197,8 +197,28 @@ async function cmdConfig(args: string[]): Promise<void> {
     return;
   }
 
+  if (args[0] === 'model' && args[1]) {
+    const model = args[1];
+    const config = require('./config').loadConfig();
+    if (config.backends[config.defaultBackend]) {
+      config.backends[config.defaultBackend]!.model = model;
+      require('./config').saveConfig(config);
+      console.log(`Model set to ${model} for ${config.defaultBackend}`);
+    }
+    return;
+  }
+
+  if (args[0] === 'model' && args[1] === 'list') {
+    const config = require('./config').loadConfig();
+    const backend = config.backends[config.defaultBackend];
+    console.log(`Current model for ${config.defaultBackend}: ${backend?.model}`);
+    return;
+  }
+
   console.log('To edit config, open:', configPath);
   console.log('Usage: jot config backend lmstudio|ollama');
+  console.log('       jot config model <model-name>');
+  console.log('       jot config model list');
   console.log('       jot config remote <url>');
   console.log('       jot config remote off');
 }
@@ -224,8 +244,12 @@ Usage:
 Configuration:
   jot config                   Show current config
   jot config backend lmstudio  Set default backend
+  jot config model <name>      Set model for current backend
+  jot config model list        Show current model
   jot config remote <url>      Enable remote model endpoint
-  jot config remote off         Disable remote
+  jot config model <name>      Set model for current backend
+  jot config model list        Show current model
+  jot config remote off        Disable remote
 
 Examples:
   jot add "discussed project timeline with advisor — need to finish literature review by March 15"
