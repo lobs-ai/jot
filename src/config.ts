@@ -35,10 +35,10 @@ const DEFAULT_CONFIG: Config = {
       apiType: 'openai'
     },
     ollama: {
-      url: 'http://localhost:11434/api/chat',
-      model: 'llama3',
+      url: 'http://localhost:11434/v1/chat/completions',
+      model: 'gemma4:e4b',
       enabled: false,
-      apiType: 'ollama'
+      apiType: 'openai'
     }
   },
   defaultBackend: 'lmstudio',
