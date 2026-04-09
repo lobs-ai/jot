@@ -156,7 +156,7 @@ export function shouldNotify(result: ProcessResult, mode?: string): boolean {
 
   if (deliveryMode === 'always') return true;
   if (deliveryMode === 'urgent') {
-    return result.urgentItems.length > 0 || result.actionItemsFound.length > 0;
+    return result.urgentItems.length > 0 || result.actionItemsFound.length > 0 || result.staleNotes.length > 0;
   }
   if (deliveryMode === 'digest') {
     const now = new Date();

@@ -1,11 +1,12 @@
 import { openDB } from './db.js';
 import { runAnalysisCycle } from './analyzer.js';
 import { loadConfig } from './config.js';
-import { readContext, saveContext, updateContextFromNote, getContextPrompt, readUserFile } from './context.js';
-import { getTodos, getOverdueTodos, getDueTodayTodos, createTodosFromActionItems, Todo } from './todos.js';
+import { readContext, updateContextFromNote } from './context.js';
+import { getOverdueTodos, getDueTodayTodos, createTodosFromActionItems } from './todos.js';
 import { createNotifier, shouldNotify, ProcessResult } from './notifier.js';
 import { fetchGmailEmails, fetchCalendarEvents, getGoogleConfig } from './google.js';
 import { generateInsights, generateDeepInsights, saveInsights } from './insights.js';
+import { loadGlobalSurfaced, saveGlobalSurfaced, isGloballySurfaced, markStaleProjectSurfaced, shouldRecheckStaleProject, markGlobal, clearStaleProject } from './sessions.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -40,6 +41,7 @@ export async function runAgentCycle(): Promise<ProcessResult> {
   log('Starting agent cycle');
   const db = openDB();
   const config = loadConfig();
+  const surfaced = loadGlobalSurfaced();
   
   let processed = 0;
   const actionItemsFound: string[] = [];
@@ -68,10 +70,29 @@ export async function runAgentCycle(): Promise<ProcessResult> {
     const dueTodayTodos = getDueTodayTodos();
     
     for (const todo of overdueTodos) {
-      urgentItems.push(`OVERDUE: ${todo.content}`);
+      if (!isGloballySurfaced(surfaced, 'overdue_todos', todo.id)) {
+        urgentItems.push(`OVERDUE: ${todo.content}`);
+        markGlobal(surfaced, 'overdue_todos', todo.id);
+      }
     }
     for (const todo of dueTodayTodos) {
       urgentItems.push(`DUE TODAY: ${todo.content}`);
+    }
+
+    log('Checking for stale projects...');
+    const context = readContext();
+    const now = Date.now();
+    
+    for (const project of context.projects) {
+      const lastUpdate = new Date(project.lastUpdated).getTime();
+      const daysSinceUpdate = (now - lastUpdate) / (1000 * 60 * 60 * 24);
+      
+      if (daysSinceUpdate >= surfaced.stale_threshold_days) {
+        if (shouldRecheckStaleProject(surfaced, project.name)) {
+          staleNotes.push(`Stale project: ${project.name} (${Math.floor(daysSinceUpdate)} days since update)`);
+          markStaleProjectSurfaced(surfaced, project.name);
+        }
+      }
     }
 
     log('Syncing external data...');
@@ -96,11 +117,26 @@ export async function runAgentCycle(): Promise<ProcessResult> {
 
     log('Updating learned context...');
     const allNotes = db.getAllNotes();
-    const context = readContext();
     
     for (const note of allNotes) {
       if (note.analyzed && (note.projects.length > 0 || note.people.length > 0)) {
         updateContextFromNote(note.id, note.projects, note.people, note.action_items);
+      }
+    }
+
+    const updatedContext = readContext();
+    for (const [projectName, surfacedDate] of Object.entries(surfaced.stale_projects)) {
+      const project = updatedContext.projects.find(p => p.name === projectName);
+      if (project) {
+        const projectUpdated = new Date(project.lastUpdated).getTime();
+        const wasSurfaced = new Date(surfacedDate).getTime();
+        if (projectUpdated > wasSurfaced) {
+          clearStaleProject(surfaced, projectName);
+          log(`Stale project ${projectName} updated, cleared from tracker`);
+        }
+      } else {
+        clearStaleProject(surfaced, projectName);
+        log(`Stale project ${projectName} removed from context, cleared from tracker`);
       }
     }
 
@@ -117,6 +153,7 @@ export async function runAgentCycle(): Promise<ProcessResult> {
       log('Stored insights refreshed');
     }
 
+    saveGlobalSurfaced(surfaced);
     setLastSync();
     
     const summary = `Processed ${processed} notes. ${actionItemsFound.length} action items, ${overdueTodos.length} overdue todos.`;

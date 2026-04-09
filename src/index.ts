@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import { openDB, Note } from './db.js';
 import { runAnalysisCycle, runProcessCycle } from './analyzer.js';
-import { loadConfig, getConfigPath, saveConfig, getActiveBackend } from './config.js';
+import { loadConfig, getConfigPath, saveConfig } from './config.js';
 import { generateInsights, getStoredInsights, formatInsights } from './insights.js';
 import { runSetupWizard } from './wizard.js';
-import { userFileExists, createUserFile, readUserFile, readContext, getContextPrompt } from './context.js';
+import { userFileExists, createUserFile, readUserFile, readContext, getContextPrompt, migrateUserMd } from './context.js';
 import { createNotifier, shouldNotify } from './notifier.js';
 import { runAgentCycle, notifyIfNeeded } from './agent.js';
-import { setupGoogleCredentials, enableGoogleService, fetchGmailEmails, fetchCalendarEvents, authenticateGoogle, getGoogleStatus, GmailEmail, CalendarEvent } from './google.js';
+import { setupGoogleCredentials, enableGoogleService, fetchGmailEmails, fetchCalendarEvents, createCalendarEvent, authenticateGoogle, getGoogleStatus, GmailEmail, CalendarEvent } from './google.js';
 import { insertTodo, getTodos, updateTodo, completeTodo, uncompleteTodo, deleteTodo, formatTodoList, Todo } from './todos.js';
-import { getAskSystemPrompt } from './prompting.js';
+import { getJotPersonaPrompt, getAskSystemPrompt } from './prompting.js';
+import { loadSession, getRecentMessages, buildSessionContext, appendToSession, callModelWithSession, saveSession, markSurfaced, loadGlobalSurfaced, saveGlobalSurfaced, clearGlobalSurfaced, clearStaleProject, MAX_HISTORY } from './sessions.js';
 import * as readline from 'readline';
 import * as child_process from 'child_process';
 import fs from 'fs';
@@ -304,6 +305,9 @@ async function cmdTodo(args: string[]): Promise<void> {
       process.exit(1);
     }
     completeTodo(id);
+    const tracker = loadGlobalSurfaced();
+    clearGlobalSurfaced(tracker, 'overdue_todos', id);
+    saveGlobalSurfaced(tracker);
     console.log(`Completed: ${id.slice(0, 8)}`);
     return;
   }
@@ -315,6 +319,9 @@ async function cmdTodo(args: string[]): Promise<void> {
       process.exit(1);
     }
     deleteTodo(id);
+    const tracker = loadGlobalSurfaced();
+    clearGlobalSurfaced(tracker, 'overdue_todos', id);
+    saveGlobalSurfaced(tracker);
     console.log(`Deleted: ${id.slice(0, 8)}`);
     return;
   }
@@ -610,11 +617,22 @@ async function cmdInsights(): Promise<void> {
 }
 
 async function cmdAsk(args: string[]): Promise<void> {
-  const question = args.join(' ').trim() || await askQuestion('Ask Jot: ');
+  const sessionFlagIdx = args.indexOf('--session');
+  const sessionName = sessionFlagIdx !== -1 && args[sessionFlagIdx + 1]
+    ? args[sessionFlagIdx + 1]
+    : 'default';
+
+  const cleanArgs = args.filter((arg, i) =>
+    !(arg === '--session' && i < args.length - 1)
+  );
+  const question = cleanArgs.join(' ').trim() || await askQuestion('Ask Jot: ');
   if (!question) {
-    console.error('Usage: jot ask "question"');
+    console.error('Usage: jot ask "question" [--session name]');
     process.exit(1);
   }
+
+  const session = loadSession(sessionName);
+  const recentMessages = getRecentMessages(session, MAX_HISTORY);
 
   const relevantNotes = db.searchNotes(question).filter(note => !isPlaceholderText(note.content)).slice(0, 8);
   const recentNotes = db.getAllNotes().filter(note => !isPlaceholderText(note.content)).slice(0, 8);
@@ -657,69 +675,105 @@ async function cmdAsk(args: string[]): Promise<void> {
     : 'None';
 
   const systemPrompt = getAskSystemPrompt();
+  const sessionContext = buildSessionContext(session);
 
-  const userPrompt = `Question:\n${question}\n\n${getContextPrompt()}## Open Todos\n${todoBlock}\n\n## Relevant Notes\n${noteBlock || 'None'}\n\n## Gmail\n${gmailContext || 'None'}\n\n## Calendar\n${calendarContext || 'None'}`;
+  const userPrompt = `Question:\n${question}\n\n${getContextPrompt()}## Open Todos\n${todoBlock}\n\n## Relevant Notes\n${noteBlock || 'None'}\n\n## Gmail\n${gmailContext || 'None'}\n\n## Calendar\n${calendarContext || 'None'}${sessionContext}`;
 
-  const { url, model, apiType } = getActiveBackend();
   try {
-    let response: Response;
+    const answer = await callModelWithSession(systemPrompt, userPrompt, session);
 
-    if (apiType === 'ollama') {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          think: false,
-          stream: false,
-          options: {
-            temperature: 0.3,
-            num_predict: 420
-          }
-        }),
-        signal: AbortSignal.timeout(90000)
-      });
-    } else {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          temperature: 0.3,
-          max_tokens: 420
-        }),
-        signal: AbortSignal.timeout(90000)
-      });
-    }
-
-    if (!response.ok) {
-      throw new Error(`Ask failed: ${response.status}`);
-    }
-
-    const data = await response.json() as { message?: { content?: string }; choices?: Array<{ message?: { content?: string } }> };
-    const answer = apiType === 'ollama'
-      ? data.message?.content?.trim()
-      : data.choices?.[0]?.message?.content?.trim();
-
-    if (!answer) {
-      console.log(buildAskFallback(question, notesForAnswer, openTodos));
-      return;
-    }
+    appendToSession(session, 'user', question);
+    appendToSession(session, 'assistant', answer);
 
     const jsonStr = answer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const parsed = JSON.parse(jsonStr) as { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] };
     console.log(formatAskAnswer(parsed) || buildAskFallback(question, notesForAnswer, openTodos));
-  } catch {
+  } catch (err) {
     console.log(buildAskFallback(question, notesForAnswer, openTodos));
   }
+}
+
+async function cmdChat(args: string[]): Promise<void> {
+  const sessionFlagIdx = args.indexOf('--session');
+  const sessionName = sessionFlagIdx !== -1 && args[sessionFlagIdx + 1]
+    ? args[sessionFlagIdx + 1]
+    : 'default';
+
+  const session = loadSession(sessionName);
+  const systemPrompt = getAskSystemPrompt();
+
+  console.log(`Jot chat — session: ${sessionName}`);
+  console.log('(Ctrl+C or type "exit" to end)\n');
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  const prompt = (): void => {
+    rl.question('You: ', async (input: string) => {
+      const text = input.trim();
+      if (!text || text.toLowerCase() === 'exit' || text.toLowerCase() === 'quit') {
+        rl.close();
+        saveSession(session);
+        console.log('\nSession saved. Goodbye!');
+        return;
+      }
+
+      const relevantNotes = db.searchNotes(text).filter(note => !isPlaceholderText(note.content)).slice(0, 5);
+      const recentNotes = db.getAllNotes().filter(note => !isPlaceholderText(note.content)).slice(0, 5);
+      const openTodos = getTodos().slice(0, 5);
+      const notes = relevantNotes.length > 0 ? relevantNotes : recentNotes;
+
+      const noteBlock = notes.map(note => note.content).join('\n');
+      const todoBlock = openTodos.length > 0
+        ? openTodos.map(todo => `- [${todo.priority}] ${todo.content}${todo.due_date ? ` (due ${todo.due_date})` : ''}`).join('\n')
+        : 'None';
+
+      const sessionContext = buildSessionContext(session);
+      const userPrompt = `Question:\n${text}\n\n${getContextPrompt()}## Open Todos\n${todoBlock}\n\n## Relevant Notes\n${noteBlock || 'None'}\n\n## Gmail\nNone\n\n## Calendar\nNone\n${sessionContext}`;
+
+      try {
+        const answer = await callModelWithSession(systemPrompt, userPrompt, session);
+        appendToSession(session, 'user', text);
+        appendToSession(session, 'assistant', answer);
+
+        const jsonStr = answer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const parsed = JSON.parse(jsonStr) as { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] };
+        console.log('\nJot: ' + (formatAskAnswer(parsed) || buildAskFallback(text, notes, openTodos)).replace(/\n/g, '\nJot: '));
+      } catch {
+        console.log('\nJot: Sorry, I had trouble answering that.');
+      }
+
+      console.log('');
+      prompt();
+    });
+  };
+
+  prompt();
+}
+
+async function cmdMigrate(args: string[]): Promise<void> {
+  const subcmd = args[0];
+
+  if (subcmd === 'user-md') {
+    const result = migrateUserMd();
+    if (result.migrated) {
+      console.log('user.md migrated to two-section format.');
+      console.log('Original backed up to: ~/.jot/user.md.bak');
+    } else if (result.error) {
+      if (result.error === 'Already in two-section format') {
+        console.log('user.md is already in two-section format. No migration needed.');
+      } else {
+        console.error('Migration failed:', result.error);
+        process.exit(1);
+      }
+    }
+    return;
+  }
+
+  console.error('Usage: jot migrate user-md');
+  process.exit(1);
 }
 
 async function cmdConfig(args: string[]): Promise<void> {
@@ -1034,6 +1088,72 @@ async function cmdContext(args: string[]): Promise<void> {
   process.exit(1);
 }
 
+async function cmdCalendar(args: string[]): Promise<void> {
+  const subcmd = args[0];
+
+  if (subcmd === 'add') {
+    const title = args.slice(1).filter(a => !a.startsWith('--')).join(' ');
+    if (!title) {
+      console.error('Usage: jot calendar add "Event title" --when "tomorrow 3pm" [--end "tomorrow 4pm"] [--location "Room 101"]');
+      process.exit(1);
+    }
+
+    const whenValue = extractFlag(args, '--when');
+    if (!whenValue) {
+      console.error('Usage: jot calendar add "Event title" --when "tomorrow 3pm" [--end "tomorrow 4pm"]');
+      process.exit(1);
+    }
+
+    const startDate = new Date(whenValue);
+    if (Number.isNaN(startDate.getTime())) {
+      console.error(`Could not parse date: "${whenValue}". Use a format like "2026-04-15 14:00" or "tomorrow 3pm".`);
+      process.exit(1);
+    }
+
+    const endValue = extractFlag(args, '--end');
+    const endDate = endValue ? new Date(endValue) : undefined;
+    if (endValue && Number.isNaN(endDate!.getTime())) {
+      console.error(`Could not parse end date: "${endValue}".`);
+      process.exit(1);
+    }
+
+    const location = extractFlag(args, '--location');
+
+    const confirmed = extractFlag(args, '--confirm');
+    if (!confirmed) {
+      const startStr = startDate.toLocaleString(undefined, {
+        weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+      });
+      const endStr = endDate
+        ? endDate.toLocaleString(undefined, { hour: 'numeric', minute: '2-digit' })
+        : '(1 hour)';
+      console.log(`About to create:`);
+      console.log(`  Title: ${title}`);
+      console.log(`  Start: ${startStr}`);
+      console.log(`  End: ${endStr}`);
+      if (location) console.log(`  Location: ${location}`);
+      const answer = await askQuestion('\nCreate this event? [y/N]: ');
+      if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+        console.log('Cancelled.');
+        return;
+      }
+    }
+
+    const created = await createCalendarEvent({
+      summary: title,
+      start: startDate.toISOString(),
+      end: endDate ? endDate.toISOString() : undefined,
+      location: location ?? undefined
+    });
+
+    console.log(`Created: ${created.summary} (${created.start})`);
+    return;
+  }
+
+  console.error('Usage: jot calendar add "Event title" --when "tomorrow 3pm" [--end "2026-04-15 15:00"] [--location "Room 101"]');
+  process.exit(1);
+}
+
 const [cmd, ...args] = process.argv.slice(2);
 
 if (!cmd) {
@@ -1044,6 +1164,7 @@ Usage: jot <command> [options]
 Commands:
   jot note "content"           Add a new note
   jot ask "question"           Ask Jot using notes and context
+  jot chat                      Interactive chat REPL
   jot edit <id> "content"      Edit a note
   jot delete <id> [--force]    Delete a note
   jot archive <id> [--unarchive]  Archive or restore a note
@@ -1060,6 +1181,7 @@ Commands:
   jot todo [add|list|done|delete|edit]  Manage todos
   jot export [--json|--markdown]  Export notes
   jot config [subcommand]      View or update config
+  jot migrate user-md          Migrate user.md to two-section format
   jot init [--wizard]         Initialize or reconfigure
 
 Todo filters:
@@ -1078,12 +1200,14 @@ Search/List filters:
 Examples:
   jot note "meeting with advisor about project timeline"
   jot ask "What should I focus on today?"
+  jot chat --session work       Interactive chat REPL (named session)
   jot edit a1b2c3d4 "updated content here"
   jot search "meeting" --tag research
   jot list --from 2024-01-01 --to 2024-12-31
   jot todo add "finish literature review" --due 2024-03-15 --priority high
   jot todo list --overdue
   jot context                   View learned context
+  jot migrate user-md           Migrate to two-section user.md format
   jot google signin           Open browser Google sign-in
   jot google gmail --enable    Enable Gmail integration
   jot process --notify          Run with notifications
@@ -1102,6 +1226,12 @@ switch (cmd) {
     break;
   case 'ask':
     cmdAsk(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'chat':
+    cmdChat(args).catch(err => {
       console.error('Error:', err.message);
       process.exit(1);
     });
@@ -1186,6 +1316,12 @@ switch (cmd) {
     break;
   case 'config':
     cmdConfig(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'migrate':
+    cmdMigrate(args).catch(err => {
       console.error('Error:', err.message);
       process.exit(1);
     });

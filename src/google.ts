@@ -238,6 +238,25 @@ async function refreshAccessToken(client: GoogleOAuthClientConfig, token: Google
   };
 }
 
+async function googleApiPost<T>(url: string, body: Record<string, unknown>): Promise<T> {
+  const accessToken = await getGoogleAccessToken();
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const body_text = await response.text();
+    throw new Error(`Google API request failed (${response.status}): ${body_text}`);
+  }
+
+  return await response.json() as T;
+}
+
 async function googleApiGet<T>(url: string): Promise<T> {
   const accessToken = await getGoogleAccessToken();
   const response = await fetch(url, {
@@ -247,8 +266,8 @@ async function googleApiGet<T>(url: string): Promise<T> {
   });
 
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Google API request failed (${response.status}): ${body}`);
+    const body_text = await response.text();
+    throw new Error(`Google API request failed (${response.status}): ${body_text}`);
   }
 
   return await response.json() as T;
@@ -491,6 +510,80 @@ export async function fetchCalendarEvents(weeks: number = 1): Promise<CalendarEv
     attendees: item.attendees?.map(attendee => attendee.email || '').filter(Boolean),
     location: item.location
   }));
+}
+
+export async function createCalendarEvent(params: {
+  summary: string;
+  start: string;
+  end?: string;
+  location?: string;
+  description?: string;
+}): Promise<CalendarEvent> {
+  const config = getGoogleConfig();
+  if (!config.calendar_enabled) {
+    throw new Error('Calendar not enabled. Run: jot google calendar --enable');
+  }
+
+  if (!loadGoogleCredentials()) {
+    throw new Error('Google credentials not found. Run: jot google setup <path-to-oauth-client.json>');
+  }
+
+  if (!loadGoogleTokens()) {
+    throw new Error('Google OAuth tokens not found. Run: jot google auth');
+  }
+
+  const event: Record<string, unknown> = {
+    summary: params.summary,
+    start: {},
+    end: {}
+  };
+
+  const startDate = new Date(params.start);
+  if (Number.isNaN(startDate.getTime())) {
+    throw new Error(`Invalid start date: ${params.start}`);
+  }
+
+  if (params.end) {
+    const endDate = new Date(params.end);
+    if (Number.isNaN(endDate.getTime())) {
+      throw new Error(`Invalid end date: ${params.end}`);
+    }
+    (event.start as Record<string, string>).dateTime = startDate.toISOString();
+    (event.start as Record<string, string>).timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    (event.end as Record<string, string>).dateTime = endDate.toISOString();
+    (event.end as Record<string, string>).timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } else {
+    (event.start as Record<string, string>).dateTime = startDate.toISOString();
+    (event.start as Record<string, string>).timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    (event.end as Record<string, string>).dateTime = new Date(startDate.getTime() + 3600000).toISOString();
+    (event.end as Record<string, string>).timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }
+
+  if (params.location) {
+    event.location = { name: params.location };
+  }
+
+  if (params.description) {
+    event.description = params.description;
+  }
+
+  const url = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+  const created = await googleApiPost<{
+    id: string;
+    summary?: string;
+    location?: { name?: string };
+    start?: { dateTime?: string; date?: string };
+    end?: { dateTime?: string; date?: string };
+  }>(url, event);
+
+  return {
+    id: created.id || '',
+    summary: created.summary || params.summary,
+    start: created.start?.dateTime || '',
+    end: created.end?.dateTime || '',
+    location: created.location?.name,
+    attendees: []
+  };
 }
 
 export function getGoogleStatus(): {

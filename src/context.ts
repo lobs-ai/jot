@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { loadConfig } from './config.js';
 
 export interface Project {
   name: string;
@@ -43,29 +44,94 @@ export function createUserFile(): void {
   const userPath = getUserFilePath();
   if (fs.existsSync(userPath)) return;
 
-  const content = `# User Context
+  const config = loadConfig();
+  const name = config.profile?.name?.trim() || '[Your Name]';
+  const bio = config.profile?.bio?.trim();
 
-## High Priority
-- 
+  const lines: string[] = [
+    `# ${name}'s Profile`,
+    '',
+  ];
 
-## Projects
-- 
+  if (bio) {
+    lines.push(bio);
+    lines.push('');
+  }
 
-## People
-- 
+  lines.push(
+    '# Auto-learned (Jot maintains this)',
+    '',
+    'Last updated: ' + new Date().toISOString().split('T')[0]
+  );
 
-## Ongoing
-- 
+  fs.writeFileSync(userPath, lines.join('\n'));
+}
 
-## Notes
-- 
+export function migrateUserMd(): { migrated: boolean; backedUp: boolean; error?: string } {
+  const userPath = getUserFilePath();
+  if (!fs.existsSync(userPath)) {
+    return { migrated: false, backedUp: false, error: 'No user.md found' };
+  }
 
-## Patterns
-- 
+  const raw = fs.readFileSync(userPath, 'utf-8');
 
-Last updated: ${new Date().toISOString().split('T')[0]}
-`;
-  fs.writeFileSync(userPath, content);
+  if (raw.includes("# Auto-learned")) {
+    return { migrated: false, backedUp: false, error: 'Already in two-section format' };
+  }
+
+  const backupPath = userPath + '.bak';
+  fs.writeFileSync(backupPath, raw);
+
+  const config = loadConfig();
+  const name = config.profile?.name?.trim() || '[Your Name]';
+  const bio = config.profile?.bio?.trim();
+
+  const autoLearnedItems: string[] = [];
+  const sectionRegex = /##\s+(High Priority|Projects|People|Ongoing|Notes|Patterns)\s*\n([\s\S]*?)(?=## |Last updated:|$)/g;
+  let match;
+
+  while ((match = sectionRegex.exec(raw)) !== null) {
+    const [, sectionName, sectionContent] = match;
+    const items = sectionContent
+      .split('\n')
+      .map(line => line.replace(/^-\s*/, '').trim())
+      .filter(line => line && line.length > 0 && line !== '-');
+
+    if (items.length === 0) continue;
+
+    if (sectionName === 'People') {
+      autoLearnedItems.push('People: ' + items.join(', '));
+    } else if (sectionName === 'Projects') {
+      autoLearnedItems.push('Projects: ' + items.join(', '));
+    } else if (sectionName === 'High Priority') {
+      autoLearnedItems.push('Priorities: ' + items.join(', '));
+    }
+  }
+
+  const lines: string[] = [
+    `# ${name}'s Profile`,
+    '',
+  ];
+
+  if (bio) {
+    lines.push(bio);
+    lines.push('');
+  }
+
+  lines.push('# Auto-learned (Jot maintains this)');
+  lines.push('');
+
+  if (autoLearnedItems.length > 0) {
+    autoLearnedItems.forEach(item => lines.push(`- ${item}`));
+  } else {
+    lines.push('(migrated from old format — Jot will update this over time)');
+  }
+
+  lines.push('');
+  lines.push('Last updated: ' + new Date().toISOString().split('T')[0]);
+
+  fs.writeFileSync(userPath, lines.join('\n'));
+  return { migrated: true, backedUp: true };
 }
 
 export function readUserFile(): string {
