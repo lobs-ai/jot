@@ -19,12 +19,17 @@ export async function analyzeNoteWithLocalModel(
     .map(n => `- [${n.id.slice(0,8)}] ${n.content.slice(0, 100)}...`)
     .join('\n');
 
-  const systemPrompt = `You are a note analysis assistant. Given a note, you must return a JSON object with:
-- tags: array of lowercase tags (max 5) - e.g., ["research", "action-item", "meeting"]
-- action_items: array of action items extracted from the note (things the user committed to do)
-- linked_note_ids: array of IDs (just the first 8 chars) of related notes from the context
+  const systemPrompt = `You analyze notes and return structured data. Always respond with ONLY valid JSON, no markdown or explanation.
 
-Only return valid JSON. No markdown, no explanation.`;
+Example input: "meeting with advisor about project timeline, need to finish literature review by March 15"
+Example output: {"tags": ["meeting", "research", "action-item"], "action_items": ["finish literature review by March 15"], "linked_note_ids": []}
+
+Another example: "looks like the diffusion model approach contradicts my earlier transformer hypothesis"
+Example output: {"tags": ["research", "contradiction"], "action_items": [], "linked_note_ids": []}
+
+Input notes may contain action items, references to previous notes, or research topics.
+
+Return JSON with these fields only: tags (array of lowercase strings, max 5), action_items (array of strings), linked_note_ids (array of strings - note IDs from the related notes provided)`;
 
   const userPrompt = note.content + '\n\n---\nRelated notes:\n' + recentNotes;
 
