@@ -28,6 +28,6 @@ echo "Linking globally..."
 npm link
 
 echo ""
-echo "Jot is installed! Run 'jot add \"your first note\"' to start."
+echo "Jot is installed! Run 'jot-note add \"your first note\"' to start."
 echo "LM Studio should be running at localhost:1234 for AI analysis."
 echo "Configure ~/.jot/config.json to change backends or add remote endpoints."
