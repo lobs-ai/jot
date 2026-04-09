@@ -75,7 +75,7 @@ Return JSON with these fields only: tags (array of lowercase strings, max 5), ac
       throw new Error(`Local model API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as { message?: { content?: string }; choices?: Array<{ message?: { content?: string } }> };
     
     let rawResponse: string;
     if (apiType === 'ollama') {

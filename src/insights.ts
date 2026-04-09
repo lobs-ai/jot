@@ -108,7 +108,7 @@ Respond with JSON: {"research_threads": [...], "suggestions": [...]}`;
     }
 
     if (response.ok) {
-      const data = await response.json();
+      const data = await response.json() as { message?: { content?: string }; choices?: Array<{ message?: { content?: string } }> };
       
       let rawResponse: string;
       if (apiType === 'ollama') {
