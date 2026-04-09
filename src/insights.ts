@@ -48,7 +48,7 @@ export async function generateInsights(): Promise<Insights> {
     .map(([tag, count]) => ({ tag, count }));
 
   // Deep analysis via local model
-  const { url, model } = getActiveBackend();
+  const { url, model, apiType } = getActiveBackend();
   
   const allContent = allNotes
     .map(n => `[${n.id.slice(0,8)}] ${n.content}`)
@@ -72,23 +72,50 @@ Respond with JSON: {"research_threads": [...], "suggestions": [...]}`;
   let suggestions: string[] = [];
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.4,
-        max_tokens: 800
-      })
-    });
+    let response: Response;
+    
+    if (apiType === 'ollama') {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          stream: false,
+          options: {
+            temperature: 0.4,
+            num_predict: 800
+          }
+        })
+      });
+    } else {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.4,
+          max_tokens: 800
+        })
+      });
+    }
 
     if (response.ok) {
-      const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-      const rawResponse = data.choices?.[0]?.message?.content?.trim() || '{}';
+      const data = await response.json();
+      
+      let rawResponse: string;
+      if (apiType === 'ollama') {
+        rawResponse = data.message?.content?.trim() || '{}';
+      } else {
+        rawResponse = data.choices?.[0]?.message?.content?.trim() || '{}';
+      }
       
       let jsonStr = rawResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       if (jsonStr.startsWith('```')) {
@@ -107,7 +134,7 @@ Respond with JSON: {"research_threads": [...], "suggestions": [...]}`;
     total_notes: allNotes.length,
     tag_summary: tagSummary,
     action_items: actionItems,
-    orphan_notes: orphanNotes.slice(0, 20), // cap at 20
+    orphan_notes: orphanNotes.slice(0, 20),
     research_threads: researchThreads,
     suggestions: suggestions
   };

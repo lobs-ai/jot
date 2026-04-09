@@ -2,10 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+export type ApiType = 'openai' | 'ollama';
+
 export interface BackendConfig {
   url: string;
   model: string;
   enabled: boolean;
+  apiType?: ApiType;
 }
 
 export interface RemoteConfig {
@@ -28,12 +31,14 @@ const DEFAULT_CONFIG: Config = {
     lmstudio: {
       url: 'http://localhost:1234/v1/chat/completions',
       model: 'qwen3.5-9b',
-      enabled: true
+      enabled: true,
+      apiType: 'openai'
     },
     ollama: {
-      url: 'http://localhost:11434/v1/chat/completions',
+      url: 'http://localhost:11434/api/chat',
       model: 'llama3',
-      enabled: false
+      enabled: false,
+      apiType: 'ollama'
     }
   },
   defaultBackend: 'lmstudio',
@@ -127,11 +132,24 @@ export function setBackendUrl(backend: 'lmstudio' | 'ollama', url: string): Conf
   return current;
 }
 
-export function getActiveBackend(): { url: string; model: string } {
+export function setBackendApiType(backend: 'lmstudio' | 'ollama', apiType: ApiType): Config {
+  const current = loadConfig();
+  if (current.backends[backend]) {
+    current.backends[backend]!.apiType = apiType;
+  }
+  saveConfig(current);
+  return current;
+}
+
+export function getActiveBackend(): { url: string; model: string; apiType: ApiType } {
   const config = loadConfig();
   
   if (config.remote.enabled && config.remote.url) {
-    return { url: config.remote.url, model: config.backends[config.defaultBackend]?.model || 'qwen3.5-9b' };
+    return { 
+      url: config.remote.url, 
+      model: config.backends[config.defaultBackend]?.model || 'qwen3.5-9b',
+      apiType: 'openai' 
+    };
   }
   
   const backend = config.backends[config.defaultBackend];
@@ -140,13 +158,13 @@ export function getActiveBackend(): { url: string; model: string } {
     const lmstudio = config.backends.lmstudio;
     const ollama = config.backends.ollama;
     if (lmstudio?.enabled) {
-      return { url: lmstudio.url, model: lmstudio.model };
+      return { url: lmstudio.url, model: lmstudio.model, apiType: lmstudio.apiType || 'openai' };
     }
     if (ollama?.enabled) {
-      return { url: ollama.url, model: ollama.model };
+      return { url: ollama.url, model: ollama.model, apiType: ollama.apiType || 'ollama' };
     }
     throw new Error(`No enabled backend found. Check your config at ${getConfigPath()}`);
   }
   
-  return { url: backend.url, model: backend.model };
+  return { url: backend.url, model: backend.model, apiType: backend.apiType || 'openai' };
 }

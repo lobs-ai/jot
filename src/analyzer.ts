@@ -11,7 +11,7 @@ export async function analyzeNoteWithLocalModel(
   note: Note,
   allNotes: Note[],
 ): Promise<AnalyzeResult> {
-  const { url, model } = getActiveBackend();
+  const { url, model, apiType } = getActiveBackend();
   
   const recentNotes = allNotes
     .filter(n => n.id !== note.id)
@@ -34,26 +34,57 @@ Return JSON with these fields only: tags (array of lowercase strings, max 5), ac
   const userPrompt = note.content + '\n\n---\nRelated notes:\n' + recentNotes;
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.3,
-        max_tokens: 500
-      })
-    });
+    let response: Response;
+    
+    if (apiType === 'ollama') {
+      // Ollama native API
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          stream: false,
+          options: {
+            temperature: 0.3,
+            num_predict: 500
+          }
+        })
+      });
+    } else {
+      // OpenAI-compatible API
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.3,
+          max_tokens: 500
+        })
+      });
+    }
 
     if (!response.ok) {
       throw new Error(`Local model API error: ${response.status}`);
     }
 
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const rawResponse = data.choices?.[0]?.message?.content?.trim() || '{}';
+    const data = await response.json();
+    
+    let rawResponse: string;
+    if (apiType === 'ollama') {
+      // Ollama response: { model, created_at, done, message: { role: 'assistant', content: '...' } }
+      rawResponse = data.message?.content?.trim() || '{}';
+    } else {
+      // OpenAI-compatible response
+      rawResponse = data.choices?.[0]?.message?.content?.trim() || '{}';
+    }
     
     let jsonStr = rawResponse;
     if (rawResponse.includes('```json')) {
