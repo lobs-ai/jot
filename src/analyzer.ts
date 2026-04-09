@@ -1,5 +1,5 @@
-import { openDB, Note } from './db';
-import { getActiveBackend } from './config';
+import { openDB, Note } from './db.js';
+import { getActiveBackend } from './config.js';
 
 export interface AnalyzeResult {
   tags: string[];

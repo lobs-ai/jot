@@ -1,5 +1,5 @@
-import { openDB, InsightsRecord } from './db';
-import { getActiveBackend } from './config';
+import { openDB } from './db.js';
+import { getActiveBackend } from './config.js';
 
 export interface Insights {
   total_notes: number;

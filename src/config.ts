@@ -17,6 +17,12 @@ export interface RemoteConfig {
   apiKey?: string;
 }
 
+export interface AnalysisConfig {
+  extractActionItems: boolean;
+  linkRelatedNotes: boolean;
+  autoAnalyze: boolean;
+}
+
 export interface Config {
   backends: {
     lmstudio?: BackendConfig;
@@ -24,6 +30,7 @@ export interface Config {
   };
   defaultBackend: 'lmstudio' | 'ollama';
   remote: RemoteConfig;
+  analysis: AnalysisConfig;
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -45,6 +52,11 @@ const DEFAULT_CONFIG: Config = {
   remote: {
     enabled: false,
     url: ''
+  },
+  analysis: {
+    extractActionItems: true,
+    linkRelatedNotes: true,
+    autoAnalyze: true
   }
 };
 
@@ -52,8 +64,8 @@ export function getConfigPath(): string {
   return path.join(os.homedir(), '.jot', 'config.json');
 }
 
-export function loadConfig(): Config {
-  const configPath = getConfigPath();
+export function loadConfig(_configPath?: string): Config {
+  const configPath = _configPath || getConfigPath();
   const configDir = path.dirname(configPath);
 
   if (!fs.existsSync(configDir)) {
@@ -74,15 +86,16 @@ export function loadConfig(): Config {
         ollama: { ...DEFAULT_CONFIG.backends.ollama, ...userConfig.backends?.ollama }
       },
       defaultBackend: userConfig.defaultBackend || DEFAULT_CONFIG.defaultBackend,
-      remote: { ...DEFAULT_CONFIG.remote, ...userConfig.remote }
+      remote: { ...DEFAULT_CONFIG.remote, ...userConfig.remote },
+      analysis: { ...DEFAULT_CONFIG.analysis, ...userConfig.analysis }
     };
   } catch {
     return DEFAULT_CONFIG;
   }
 }
 
-export function saveConfig(config: Config): void {
-  const configPath = getConfigPath();
+export function saveConfig(config: Config, _configPath?: string): void {
+  const configPath = _configPath || getConfigPath();
   const configDir = path.dirname(configPath);
   
   if (!fs.existsSync(configDir)) {

@@ -1,14 +1,21 @@
 #!/usr/bin/env node
-import { openDB, Note } from './db';
-import { runAnalysisCycle } from './analyzer';
-import { loadConfig, getConfigPath } from './config';
-import { generateInsights, generateDeepInsights, getStoredInsights, saveInsights, formatInsights } from './insights';
+import { openDB, Note } from './db.js';
+import { runAnalysisCycle } from './analyzer.js';
+import { loadConfig, getConfigPath, saveConfig } from './config.js';
+import { generateInsights, generateDeepInsights, getStoredInsights, saveInsights, formatInsights } from './insights.js';
+import { runSetupWizard } from './wizard.js';
+import * as readline from 'readline';
+import fs from 'fs';
+import path from 'path';
 
 const db = openDB();
 
 function printNote(note: Note, showRaw = false): void {
   const date = new Date(note.created_at).toLocaleString();
   console.log(`\n[${note.id.slice(0, 8)}] ${date}`);
+  if (note.archived) {
+    console.log('  [ARCHIVED]');
+  }
   if (showRaw || !note.analyzed) {
     console.log(`  RAW: ${note.content}`);
   }
@@ -26,6 +33,19 @@ function printNote(note: Note, showRaw = false): void {
   }
 }
 
+function askQuestion(prompt: string): Promise<string> {
+  return new Promise(resolve => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    rl.question(prompt, (answer: string) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
 async function cmdAdd(args: string[]): Promise<void> {
   const content = args.join(' ');
   if (!content.trim()) {
@@ -36,21 +56,134 @@ async function cmdAdd(args: string[]): Promise<void> {
   const note = db.insertNote(content);
   console.log(`Jotted: ${note.id.slice(0, 8)}`);
   
-  runAnalysisCycle().then(({ processed }) => {
-    if (processed > 0) {
-      console.log(`Analysis complete: ${processed} notes categorized`);
+  const config = loadConfig();
+  if (config.analysis?.autoAnalyze) {
+    runAnalysisCycle().then(({ processed }) => {
+      if (processed > 0) {
+        console.log(`Analysis complete: ${processed} notes categorized`);
+      }
+    }).catch(() => {});
+  }
+}
+
+async function cmdEdit(args: string[]): Promise<void> {
+  if (args.length < 2) {
+    console.error('Usage: jot edit <note-id> "new content"');
+    process.exit(1);
+  }
+  
+  const noteId = args[0];
+  const newContent = args.slice(1).join(' ');
+  
+  const note = db.getNote(noteId);
+  if (!note) {
+    console.error(`Note not found: ${noteId}`);
+    process.exit(1);
+  }
+  
+  db.updateNoteContent(noteId, newContent);
+  console.log(`Updated: ${noteId.slice(0, 8)}`);
+}
+
+async function cmdDelete(args: string[]): Promise<void> {
+  if (args.length < 1) {
+    console.error('Usage: jot delete <note-id> [--force]');
+    process.exit(1);
+  }
+  
+  const noteId = args[0];
+  const note = db.getNote(noteId);
+  if (!note) {
+    console.error(`Note not found: ${noteId}`);
+    process.exit(1);
+  }
+  
+  if (args.includes('--force')) {
+    db.deleteNote(noteId);
+    console.log(`Deleted: ${noteId.slice(0, 8)}`);
+  } else {
+    const answer = await askQuestion(`Delete note "${note.content.slice(0, 50)}..."? [y/N]: `);
+    if (answer.toLowerCase() === 'y') {
+      db.deleteNote(noteId);
+      console.log(`Deleted: ${noteId.slice(0, 8)}`);
+    } else {
+      console.log('Cancelled.');
     }
-  }).catch(() => {});
+  }
+}
+
+async function cmdArchive(args: string[]): Promise<void> {
+  if (args.length < 1) {
+    console.error('Usage: jot archive <note-id> [--unarchive]');
+    process.exit(1);
+  }
+  
+  const noteId = args[0];
+  const unarchive = args.includes('--unarchive');
+  
+  const note = db.getNote(noteId);
+  if (!note) {
+    console.error(`Note not found: ${noteId}`);
+    process.exit(1);
+  }
+  
+  if (unarchive) {
+    db.unarchiveNote(noteId);
+    console.log(`Restored: ${noteId.slice(0, 8)}`);
+  } else {
+    db.archiveNote(noteId);
+    console.log(`Archived: ${noteId.slice(0, 8)}`);
+  }
+}
+
+async function cmdLink(args: string[]): Promise<void> {
+  if (args.length < 2) {
+    console.error('Usage: jot link <note-id> <other-note-id>');
+    console.error('       jot link <note-id> --remove <other-note-id>');
+    process.exit(1);
+  }
+  
+  const noteId = args[0];
+  const remove = args.includes('--remove');
+  
+  if (remove) {
+    const otherId = args[args.length - 1];
+    db.unlinkNotes(noteId, otherId);
+    console.log(`Unlinked: ${noteId.slice(0, 8)} <-> ${otherId.slice(0, 8)}`);
+  } else {
+    const otherId = args[1];
+    db.linkNotes(noteId, otherId);
+    console.log(`Linked: ${noteId.slice(0, 8)} <-> ${otherId.slice(0, 8)}`);
+  }
+}
+
+function extractFlag(args: string[], flag: string): string | null {
+  const idx = args.indexOf(flag);
+  if (idx >= 0 && idx < args.length - 1) {
+    const val = args[idx + 1];
+    if (!val.startsWith('--')) {
+      return val;
+    }
+  }
+  return null;
 }
 
 async function cmdSearch(args: string[]): Promise<void> {
   const query = args.join(' ');
   if (!query.trim()) {
-    console.error('Usage: jot search "query"');
+    console.error('Usage: jot search "query" [--tag #tag] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--archived]');
     process.exit(1);
   }
-
-  const notes = db.searchNotes(query);
+  
+  const filters = {
+    tag: extractFlag(args, '--tag') || extractFlag(args, '-t'),
+    from: extractFlag(args, '--from'),
+    to: extractFlag(args, '--to'),
+    includeArchived: args.includes('--archived')
+  };
+  
+  const notes = db.searchNotes(query, filters);
+  
   if (notes.length === 0) {
     console.log('No notes found matching that query.');
     return;
@@ -90,13 +223,21 @@ async function cmdTags(args: string[]): Promise<void> {
 }
 
 async function cmdList(args: string[]): Promise<void> {
-  const allNotes = db.getAllNotes();
+  const filters = {
+    tag: extractFlag(args, '--tag') || extractFlag(args, '-t'),
+    from: extractFlag(args, '--from'),
+    to: extractFlag(args, '--to'),
+    includeArchived: args.includes('--archived')
+  };
+  
+  const showRaw = args.includes('--raw');
+  const allNotes = db.getAllNotes(filters);
+  
   if (allNotes.length === 0) {
     console.log('No notes yet. Add your first note with jot add "your thought"');
     return;
   }
 
-  const showRaw = args.includes('--raw');
   console.log(`\n=== ${allNotes.length} note(s) ===`);
   allNotes.forEach(note => printNote(note, showRaw));
 }
@@ -149,7 +290,6 @@ async function cmdAnalyze(): Promise<void> {
 
 async function cmdInsights(): Promise<void> {
   try {
-    // Show stored insights instantly if available
     const stored = getStoredInsights();
     if (stored) {
       console.log(formatInsights(stored));
@@ -158,15 +298,16 @@ async function cmdInsights(): Promise<void> {
       console.log(formatInsights(insights));
     }
     
-    // Always kick off fresh analysis in background, update stored when done
-    const baseInsights = await generateInsights();
     generateDeepInsights().then(deep => {
-      baseInsights.research_threads = deep.research_threads;
-      baseInsights.suggestions = deep.suggestions;
-      saveInsights(baseInsights);
-      if (stored) {
-        process.stdout.write('\n' + formatInsights(baseInsights).replace('=== Jot Insights ===', '=== Jot Insights (updated) ==='));
-      }
+      const baseInsights = generateInsights();
+      baseInsights.then(bi => {
+        bi.research_threads = deep.research_threads;
+        bi.suggestions = deep.suggestions;
+        saveInsights(bi);
+        if (stored) {
+          process.stdout.write('\n' + formatInsights(bi).replace('=== Jot Insights ===', '=== Jot Insights (updated) ==='));
+        }
+      });
     }).catch(() => {});
   } catch (error) {
     console.error('Insights generation failed:', error);
@@ -202,8 +343,13 @@ async function cmdConfig(args: string[]): Promise<void> {
     } else {
       console.log(`\nRemote: disabled`);
     }
+    
+    console.log(`\nAnalysis:`);
+    console.log(`  Auto-analyze: ${config.analysis?.autoAnalyze ?? true}`);
+    console.log(`  Extract action items: ${config.analysis?.extractActionItems ?? true}`);
+    console.log(`  Link related notes: ${config.analysis?.linkRelatedNotes ?? true}`);
 
-    console.log(`\nNote: Edit ${configPath} directly to change advanced settings.`);
+    console.log(`\nNote: Run "jot init --wizard" to reconfigure.`);
     return;
   }
 
@@ -215,6 +361,7 @@ async function cmdConfig(args: string[]): Promise<void> {
     const backend = config.backends[config.defaultBackend];
     if (backend) {
       backend.url = url;
+      saveConfig(config);
       console.log(`Set ${config.defaultBackend} URL to: ${url}`);
     }
     return;
@@ -226,6 +373,7 @@ async function cmdConfig(args: string[]): Promise<void> {
     const backend = config.backends[config.defaultBackend];
     if (backend) {
       backend.model = model;
+      saveConfig(config);
       console.log(`Set ${config.defaultBackend} model to: ${model}`);
     }
     return;
@@ -245,6 +393,7 @@ async function cmdConfig(args: string[]): Promise<void> {
     }
     backend.enabled = true;
     config.defaultBackend = backendName;
+    saveConfig(config);
     console.log(`Switched to ${backendName}. URL: ${backend.url} | Model: ${backend.model}`);
     return;
   }
@@ -258,32 +407,63 @@ async function cmdConfig(args: string[]): Promise<void> {
     const config = loadConfig();
     if (config.backends[backendName]) {
       config.backends[backendName]!.enabled = true;
+      saveConfig(config);
       console.log(`Enabled ${backendName}`);
     }
     return;
   }
 
   console.error(`Unknown config subcommand: ${subcmd}`);
-  console.error('Usage: jot config [url <url>|model <name>|backend <lmstudio|ollama>|enable <lmstudio|ollama>]');
+  console.error('Usage: jot config [url|model|backend|enable] [args]');
+  console.error('       jot init --wizard     Re-run setup wizard');
   process.exit(1);
 }
 
-async function cmdInit(): Promise<void> {
-  const fs = require('fs');
+async function cmdInit(args: string[]): Promise<void> {
   const configPath = getConfigPath();
-  const configDir = require('path').dirname(configPath);
+  const configDir = path.dirname(configPath);
   
   if (!fs.existsSync(configDir)) {
     fs.mkdirSync(configDir, { recursive: true });
   }
   
+  if (args.includes('--wizard')) {
+    await runSetupWizard();
+    return;
+  }
+  
   const config = loadConfig();
   console.log(`Jot initialized at ${configPath}`);
   console.log(`Default backend: ${config.defaultBackend}`);
-  console.log(`\nEdit the config file to change settings.`);
+  console.log(`\nRun "jot init --wizard" to reconfigure.`);
 }
 
-// CLI routing
+async function cmdExport(args: string[]): Promise<void> {
+  const format = args.includes('--json') ? 'json' : 'markdown';
+  const filters = {
+    tag: extractFlag(args, '--tag') || extractFlag(args, '-t'),
+    from: extractFlag(args, '--from'),
+    to: extractFlag(args, '--to'),
+    includeArchived: args.includes('--archived')
+  };
+  
+  const notes = db.getAllNotes(filters);
+  
+  if (format === 'json') {
+    console.log(JSON.stringify(notes, null, 2));
+  } else {
+    console.log('# Jot Notes Export\n');
+    notes.forEach(note => {
+      console.log(`## [${note.id.slice(0, 8)}] ${new Date(note.created_at).toLocaleString()}`);
+      if (note.archived) console.log('*Archived*');
+      console.log(note.content);
+      if (note.tags.length > 0) console.log(`\nTags: ${note.tags.map(t => '#' + t).join(' ')}`);
+      if (note.action_items.length > 0) console.log(`\nAction items:\n${note.action_items.map(a => '- [ ] ' + a).join('\n')}`);
+      console.log('\n---\n');
+    });
+  }
+}
+
 const [cmd, ...args] = process.argv.slice(2);
 
 if (!cmd) {
@@ -293,20 +473,33 @@ Usage: jot <command> [options]
 
 Commands:
   jot add "note content"       Add a new note
+  jot edit <id> "content"      Edit a note
+  jot delete <id> [--force]    Delete a note
+  jot archive <id> [--unarchive]  Archive or restore a note
+  jot link <id1> <id2>         Link two notes
   jot search "query"          Search notes
   jot list                     List all notes
   jot tags [tag]               List tags or filter by tag
   jot summarize                Quick summary
   jot analyze                 Run analysis on unanalyzed notes
   jot insights                 Deep corpus analysis (AI-powered)
-  jot config [url|model|backend|enable] [args]  View or update config
-  jot init                     Initialize jot directory
+  jot export [--json|--markdown]  Export notes
+  jot config [subcommand]      View or update config
+  jot init [--wizard]         Initialize or reconfigure
+
+Search/List filters:
+  --tag/-t <tag>               Filter by tag
+  --from <YYYY-MM-DD>          Notes after date
+  --to <YYYY-MM-DD>            Notes before date
+  --archived                    Include archived notes
 
 Examples:
   jot add "meeting with advisor about project timeline"
-  jot search "meeting"
-  jot tags
-  jot insights
+  jot edit a1b2c3d4 "updated content here"
+  jot search "meeting" --tag research
+  jot list --from 2024-01-01 --to 2024-12-31
+  jot link a1b2c3d4 e5f6g7h8
+  jot export --markdown --tag work
 
 Config location: ~/.jot/config.json
 Data location: ~/.jot/notes.db`);
@@ -316,6 +509,30 @@ Data location: ~/.jot/notes.db`);
 switch (cmd) {
   case 'add':
     cmdAdd(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'edit':
+    cmdEdit(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'delete':
+    cmdDelete(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'archive':
+    cmdArchive(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'link':
+    cmdLink(args).catch(err => {
       console.error('Error:', err.message);
       process.exit(1);
     });
@@ -356,6 +573,12 @@ switch (cmd) {
       process.exit(1);
     });
     break;
+  case 'export':
+    cmdExport(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
   case 'config':
     cmdConfig(args).catch(err => {
       console.error('Error:', err.message);
@@ -363,7 +586,7 @@ switch (cmd) {
     });
     break;
   case 'init':
-    cmdInit().catch(err => {
+    cmdInit(args).catch(err => {
       console.error('Error:', err.message);
       process.exit(1);
     });
