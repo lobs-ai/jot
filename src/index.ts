@@ -215,10 +215,22 @@ async function cmdConfig(args: string[]): Promise<void> {
     return;
   }
 
+  if (args[0] === 'url' && args[1]) {
+    const url = args[1];
+    const config = require('./config').loadConfig();
+    if (config.backends[config.defaultBackend]) {
+      config.backends[config.defaultBackend]!.url = url;
+      require('./config').saveConfig(config);
+      console.log(`URL set to ${url} for ${config.defaultBackend}`);
+    }
+    return;
+  }
+
   console.log('To edit config, open:', configPath);
   console.log('Usage: jot config backend lmstudio|ollama');
   console.log('       jot config model <model-name>');
   console.log('       jot config model list');
+  console.log('       jot config url <url>        Set API URL for current backend');
   console.log('       jot config remote <url>');
   console.log('       jot config remote off');
 }
