@@ -146,28 +146,41 @@ interface UserContext {
 
 ## Agent Cycle (Background Daemon)
 
+The daemon is always asleep but always watching. Three-tier cycle model:
+
 ```
-Every 5 minutes (launchd/cron):
-1. Analyze new notes
-   - For each unanalyzed note:
-     a. Read user.md + context.json into prompt
-     b. Run analysis (local model)
-     c. UPDATE note with tags/actions/projects/people
-     d. UPDATE context.json (new projects, people, patterns)
-2. Create todos from action_items
-3. Sync external data (if enabled)
-   - Fetch Gmail → cache for context
-   - Fetch Calendar → cache for context
-4. Check todo status
-   - Find overdue todos → add to urgent notification
-   - Find due-today todos
-5. If threshold breached OR digest time:
-   - Load notifier from config
-   - notifier.deliver(results)
-6. Mark last-processed timestamp
+┌─────────────────────────────────────────────────────────────────┐
+│ TIER 1: Daemon Cycle (every 15 min via launchd/cron)            │
+│ - Sync Gmail + Calendar → update context cache                  │
+│ - Analyze unprocessed notes                                     │
+│ - Check todo status (overdue, due today)                        │
+│ - Consult surfaced.json → decide what to surface               │
+│ - Deliver if threshold breached (urgent) or digest time         │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TIER 2: Daily Digest (7:30am ET, before first class)           │
+│ - Accumulated overnight items → morning summary                 │
+│ - Surfaces things that happened while asleep                    │
+│ - Delivered via configured notifier                             │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TIER 3: Urgent Threshold (fires immediately, bypasses cycle)  │
+│ Triggers:                                                       │
+│ - Overdue todo detected                                         │
+│ - Email from high-priority contact (advisor, recruiter)         │
+│ - Meeting starting in <15 min with no prep notes                │
+│ - Any item tagged "urgent" by analyzer                          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-Idempotent — re-running no-ops for already-processed notes.
+**Shared state across tiers:**
+- `surfaced.json` — consulted every cycle to avoid re-surfacing
+- `context.json` — accumulates across runs, never wiped
+- Session archive — persists conversation history
+
+Idempotent — re-running no-ops for already-processed items.
 
 ---
 
