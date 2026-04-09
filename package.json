@@ -16,7 +16,8 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prompt:test": "tsc && node dist/prompt-harness.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0"

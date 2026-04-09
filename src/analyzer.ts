@@ -1,6 +1,7 @@
 import { openDB, Note } from './db.js';
 import { getActiveBackend } from './config.js';
 import { getContextPrompt, updateContextFromNote, readContext } from './context.js';
+import { getJotPersonaPrompt } from './prompting.js';
 
 export interface AnalyzeResult {
   tags: string[];
@@ -25,7 +26,7 @@ export async function analyzeNoteWithLocalModel(
 
   const contextPrompt = getContextPrompt();
 
-  const systemPrompt = `You analyze notes and return structured data. Always respond with ONLY valid JSON, no markdown or explanation.
+  const systemPrompt = `${getJotPersonaPrompt()} You analyze notes and return structured data. Always respond with ONLY valid JSON, no markdown or explanation.
 
 Example input: "meeting with advisor about project timeline, need to finish literature review by March 15"
 Example output: {"tags": ["meeting", "research", "action-item"], "action_items": ["finish literature review by March 15"], "linked_note_ids": [], "projects": ["PAW"], "people": ["Marcus"], "priorities": ["finish literature review"]}
@@ -63,13 +64,14 @@ Return JSON with these fields only:
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt }
           ],
+          think: false,
           stream: false,
           options: {
             temperature: 0.3,
             num_predict: 500
           }
         }),
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(60000)
       });
     } else {
       response = await fetch(url, {
@@ -84,7 +86,7 @@ Return JSON with these fields only:
           temperature: 0.3,
           max_tokens: 500
         }),
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(60000)
       });
     }
 

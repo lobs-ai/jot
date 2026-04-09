@@ -23,6 +23,12 @@ export interface AnalysisConfig {
   autoAnalyze: boolean;
 }
 
+export interface UserProfile {
+  name?: string;
+  bio?: string;
+  timezone?: string;
+}
+
 export interface Config {
   backends: {
     lmstudio?: BackendConfig;
@@ -37,6 +43,19 @@ export interface Config {
   digestTime?: string;
   processInterval?: number;
   userFile?: string;
+  profile?: UserProfile;
+}
+
+function normalizeBackendUrl(url: string, apiType: ApiType): string {
+  if (apiType === 'ollama' && url.endsWith('/v1/chat/completions')) {
+    return url.replace(/\/v1\/chat\/completions$/, '/api/chat');
+  }
+
+  if (apiType === 'openai' && url.endsWith('/api/chat')) {
+    return url.replace(/\/api\/chat$/, '/v1/chat/completions');
+  }
+
+  return url;
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -69,7 +88,12 @@ const DEFAULT_CONFIG: Config = {
   deliveryMode: 'urgent',
   digestTime: '08:00',
   processInterval: 300,
-  userFile: '~/.jot/user.md'
+  userFile: '~/.jot/user.md',
+  profile: {
+    name: '',
+    bio: '',
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'
+  }
 };
 
 export function getConfigPath(): string {
@@ -105,7 +129,8 @@ export function loadConfig(): Config {
       deliveryMode: userConfig.deliveryMode || DEFAULT_CONFIG.deliveryMode,
       digestTime: userConfig.digestTime || DEFAULT_CONFIG.digestTime,
       processInterval: userConfig.processInterval || DEFAULT_CONFIG.processInterval,
-      userFile: userConfig.userFile || DEFAULT_CONFIG.userFile
+      userFile: userConfig.userFile || DEFAULT_CONFIG.userFile,
+      profile: { ...DEFAULT_CONFIG.profile, ...userConfig.profile }
     };
   } catch {
     return DEFAULT_CONFIG;
@@ -128,7 +153,7 @@ export function getActiveBackend(): { url: string; model: string; apiType: ApiTy
   
   if (config.remote.enabled && config.remote.url) {
     return { 
-      url: config.remote.url, 
+      url: normalizeBackendUrl(config.remote.url, 'openai'), 
       model: config.backends[config.defaultBackend]?.model || 'qwen2.5-7b-instruct',
       apiType: 'openai' 
     };
@@ -139,15 +164,15 @@ export function getActiveBackend(): { url: string; model: string; apiType: ApiTy
     const lmstudio = config.backends.lmstudio;
     const ollama = config.backends.ollama;
     if (lmstudio?.enabled) {
-      return { url: lmstudio.url, model: lmstudio.model, apiType: lmstudio.apiType || 'openai' };
+      return { url: normalizeBackendUrl(lmstudio.url, lmstudio.apiType || 'openai'), model: lmstudio.model, apiType: lmstudio.apiType || 'openai' };
     }
     if (ollama?.enabled) {
-      return { url: ollama.url, model: ollama.model, apiType: ollama.apiType || 'ollama' };
+      return { url: normalizeBackendUrl(ollama.url, ollama.apiType || 'ollama'), model: ollama.model, apiType: ollama.apiType || 'ollama' };
     }
     throw new Error(`No enabled backend found. Check your config at ${getConfigPath()}`);
   }
   
-  return { url: backend.url, model: backend.model, apiType: backend.apiType || 'openai' };
+  return { url: normalizeBackendUrl(backend.url, backend.apiType || 'openai'), model: backend.model, apiType: backend.apiType || 'openai' };
 }
 
 export function getDBPath(): string {

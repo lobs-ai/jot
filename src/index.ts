@@ -1,20 +1,139 @@
 #!/usr/bin/env node
 import { openDB, Note } from './db.js';
 import { runAnalysisCycle, runProcessCycle } from './analyzer.js';
-import { loadConfig, getConfigPath, saveConfig } from './config.js';
-import { generateInsights, generateDeepInsights, getStoredInsights, saveInsights, formatInsights } from './insights.js';
+import { loadConfig, getConfigPath, saveConfig, getActiveBackend } from './config.js';
+import { generateInsights, getStoredInsights, formatInsights } from './insights.js';
 import { runSetupWizard } from './wizard.js';
-import { userFileExists, createUserFile, readUserFile, readContext } from './context.js';
+import { userFileExists, createUserFile, readUserFile, readContext, getContextPrompt } from './context.js';
 import { createNotifier, shouldNotify } from './notifier.js';
 import { runAgentCycle, notifyIfNeeded } from './agent.js';
-import { setupGoogleCredentials, enableGoogleService, fetchGmailEmails, fetchCalendarEvents, authenticateGoogle, getGoogleStatus } from './google.js';
+import { setupGoogleCredentials, enableGoogleService, fetchGmailEmails, fetchCalendarEvents, authenticateGoogle, getGoogleStatus, GmailEmail, CalendarEvent } from './google.js';
 import { insertTodo, getTodos, updateTodo, completeTodo, uncompleteTodo, deleteTodo, formatTodoList, Todo } from './todos.js';
+import { getAskSystemPrompt } from './prompting.js';
 import * as readline from 'readline';
 import * as child_process from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 const db = openDB();
+
+function spawnDetachedWorker(scriptName: string): void {
+  const scriptPath = fileURLToPath(new URL(`./${scriptName}`, import.meta.url));
+  const child = child_process.spawn(process.execPath, [scriptPath], {
+    detached: true,
+    stdio: 'ignore'
+  });
+  child.unref();
+}
+
+function buildAskFallback(question: string, notes: Note[], todos: Todo[]): string {
+  const lines: string[] = [];
+  lines.push(`I could not reach the local model quickly, so here is a direct summary for: "${question}"`);
+
+  if (todos.length > 0) {
+    lines.push('');
+    lines.push('Top open todos:');
+    todos.slice(0, 5).forEach((todo, index) => {
+      lines.push(`${index + 1}. [${todo.priority}] ${todo.content}${todo.due_date ? ` (due ${todo.due_date})` : ''}`);
+    });
+  }
+
+  if (notes.length > 0) {
+    lines.push('');
+    lines.push('Relevant notes:');
+    notes.slice(0, 5).forEach((note, index) => {
+      lines.push(`${index + 1}. ${note.content}`);
+    });
+  }
+
+  if (todos.length === 0 && notes.length === 0) {
+    lines.push('');
+    lines.push('No strong matches found in your notes or todos yet.');
+  }
+
+  return lines.join('\n');
+}
+
+function formatAskAnswer(answer: { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] }): string {
+  const normalizeAskItem = (value: string): string => value
+    .toLowerCase()
+    .replace(/^you need to\s+/, '')
+    .replace(/^you should\s+/, '')
+    .replace(/^please\s+/, '')
+    .replace(/^reach out to\s+/, 'talk to ')
+    .replace(/^follow up with\s+/, 'talk to ')
+    .replace(/^review\s+/, 'review ')
+    .replace(/^respond to\s+/, 'respond to ')
+    .replace(/^reply to\s+/, 'respond to ')
+    .replace(/^talk to\s+/, 'talk to ')
+    .replace(/^check in with\s+/, 'talk to ')
+    .replace(/^prepare for\s+/, 'prepare for ')
+    .replace(/your /g, '')
+    .replace(/getting /g, '')
+    .replace(/email proof/g, 'proof email')
+    .replace(/ticket comment/g, 'ticket')
+    .replace(/reimbursement request/g, 'reimbursement ticket')
+    .replace(/[.]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const dedupeSection = (items: string[], seen: Set<string>): string[] => {
+    const result: string[] = [];
+    for (const item of items) {
+      const normalized = normalizeAskItem(item);
+      const overlaps = [...seen].some(existing =>
+        normalized === existing ||
+        normalized.includes(existing) ||
+        existing.includes(normalized)
+      );
+
+      if (!normalized || overlaps) {
+        continue;
+      }
+      seen.add(normalized);
+      result.push(item);
+    }
+    return result;
+  };
+
+  const seen = new Set<string>();
+  const confirmed = dedupeSection(answer.confirmed || [], seen);
+  const possible = dedupeSection(answer.possible || [], seen);
+  const nextActions = dedupeSection(answer.next_actions || [], seen);
+
+  const lines: string[] = [];
+
+  if (answer.summary) {
+    lines.push(answer.summary.trim());
+  }
+
+  if (confirmed.length > 0) {
+    if (lines.length > 0) {
+      lines.push('');
+    }
+    lines.push('Confirmed:');
+    confirmed.forEach(item => lines.push(`- ${item}`));
+  }
+
+  if (possible.length > 0) {
+    if (lines.length > 0) {
+      lines.push('');
+    }
+    lines.push('Possible / Follow-up:');
+    possible.forEach(item => lines.push(`- ${item}`));
+  }
+
+  if (nextActions.length > 0) {
+    if (lines.length > 0) {
+      lines.push('');
+    }
+    lines.push('Next actions:');
+    nextActions.forEach(item => lines.push(`- ${item}`));
+  }
+
+  return lines.join('\n');
+}
 
 function printNote(note: Note, showRaw = false): void {
   const date = new Date(note.created_at).toLocaleString();
@@ -52,6 +171,104 @@ function askQuestion(prompt: string): Promise<string> {
   });
 }
 
+function stripTodoFlags(args: string[]): string[] {
+  const result: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--due') {
+      i++;
+      continue;
+    }
+    if (arg === '--priority') {
+      i++;
+      continue;
+    }
+    if (arg === '--high' || arg === '--medium' || arg === '--low') {
+      continue;
+    }
+    result.push(arg);
+  }
+
+  return result;
+}
+
+function isPlaceholderText(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'test' || normalized === 'test note' || normalized === 'todo test';
+}
+
+function getRelativeDayLabel(dateValue: string): 'today' | 'tomorrow' | null {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((target.getTime() - today.getTime()) / 86400000);
+
+  if (diffDays === 0) {
+    return 'today';
+  }
+
+  if (diffDays === 1) {
+    return 'tomorrow';
+  }
+
+  return null;
+}
+
+function formatCalendarMoment(dateValue: string): string {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) {
+    return dateValue;
+  }
+
+  const relative = getRelativeDayLabel(dateValue);
+  const time = date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+
+  if (relative) {
+    return `${relative} at ${time}`;
+  }
+
+  const day = date.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric'
+  });
+  return `${day} at ${time}`;
+}
+
+function formatCalendarRange(event: CalendarEvent): string {
+  const start = formatCalendarMoment(event.start);
+  if (!event.end) {
+    return start;
+  }
+
+  const end = new Date(event.end);
+  if (Number.isNaN(end.getTime())) {
+    return `${start} to ${event.end}`;
+  }
+
+  const sameDay = getRelativeDayLabel(event.start) === getRelativeDayLabel(event.end)
+    || new Date(event.start).toDateString() === end.toDateString();
+
+  if (sameDay) {
+    const endTime = end.toLocaleTimeString(undefined, {
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+    return `${start} to ${endTime}`;
+  }
+
+  return `${start} to ${formatCalendarMoment(event.end)}`;
+}
+
 async function cmdTodo(args: string[]): Promise<void> {
   if (args.length === 0 || args[0] === 'list') {
     const filters = {
@@ -68,13 +285,13 @@ async function cmdTodo(args: string[]): Promise<void> {
   const subcmd = args[0];
 
   if (subcmd === 'add') {
-    const content = args.slice(1).join(' ');
+    const content = stripTodoFlags(args.slice(1)).join(' ');
     if (!content) {
       console.error('Usage: jot todo add "task" [--due YYYY-MM-DD] [--priority high|medium|low]');
       process.exit(1);
     }
     const dueDate = extractFlag(args, '--due');
-    const priority = args.includes('--high') ? 'high' : args.includes('--low') ? 'low' : 'medium';
+    const priority = (extractFlag(args, '--priority') || (args.includes('--high') ? 'high' : args.includes('--low') ? 'low' : args.includes('--medium') ? 'medium' : 'medium')) as 'high' | 'medium' | 'low';
     const todo = insertTodo(content, dueDate, priority);
     console.log(`Todo added: ${todo.id.slice(0, 8)}`);
     return;
@@ -108,9 +325,9 @@ async function cmdTodo(args: string[]): Promise<void> {
       console.error('Usage: jot todo edit <id> "content" [--due YYYY-MM-DD] [--priority high|medium|low]');
       process.exit(1);
     }
-    const content = args.slice(2).join(' ').replace(/^"(.+)"$/, '$1');
+    const content = stripTodoFlags(args.slice(2)).join(' ').replace(/^"(.+)"$/, '$1');
     const dueDate = extractFlag(args, '--due');
-    const priority = args.includes('--high') ? 'high' : args.includes('--low') ? 'low' : args.includes('--medium') ? 'medium' : undefined;
+    const priority = (extractFlag(args, '--priority') || (args.includes('--high') ? 'high' : args.includes('--low') ? 'low' : args.includes('--medium') ? 'medium' : undefined)) as 'high' | 'medium' | 'low' | undefined;
     updateTodo(id, {
       content: content || undefined,
       due_date: dueDate,
@@ -148,11 +365,7 @@ async function cmdAdd(args: string[]): Promise<void> {
   
   const config = loadConfig();
   if (config.analysis?.autoAnalyze) {
-    runAnalysisCycle().then(({ processed }) => {
-      if (processed > 0) {
-        console.log(`Analysis complete: ${processed} notes categorized`);
-      }
-    }).catch(() => {});
+    spawnDetachedWorker('analysis-worker.js');
   }
 }
 
@@ -387,21 +600,125 @@ async function cmdInsights(): Promise<void> {
       const insights = await generateInsights();
       console.log(formatInsights(insights));
     }
-    
-    generateDeepInsights().then(deep => {
-      const baseInsights = generateInsights();
-      baseInsights.then(bi => {
-        bi.research_threads = deep.research_threads;
-        bi.suggestions = deep.suggestions;
-        saveInsights(bi);
-        if (stored) {
-          process.stdout.write('\n' + formatInsights(bi).replace('=== Jot Insights ===', '=== Jot Insights (updated) ==='));
-        }
-      });
-    }).catch(() => {});
+
+    spawnDetachedWorker('insights-worker.js');
+    console.log('\nRefreshing deeper insights in the background...');
   } catch (error) {
     console.error('Insights generation failed:', error);
     process.exit(1);
+  }
+}
+
+async function cmdAsk(args: string[]): Promise<void> {
+  const question = args.join(' ').trim() || await askQuestion('Ask Jot: ');
+  if (!question) {
+    console.error('Usage: jot ask "question"');
+    process.exit(1);
+  }
+
+  const relevantNotes = db.searchNotes(question).filter(note => !isPlaceholderText(note.content)).slice(0, 8);
+  const recentNotes = db.getAllNotes().filter(note => !isPlaceholderText(note.content)).slice(0, 8);
+  const openTodos = getTodos().slice(0, 8);
+
+  let gmailContext = '';
+  let calendarContext = '';
+  try {
+    const emails = await fetchGmailEmails(3);
+    if (emails.length > 0) {
+      gmailContext = emails
+        .slice(0, 3)
+        .map((email: GmailEmail) => `- ${email.subject} | ${email.from} | ${email.snippet}`)
+        .join('\n');
+    }
+  } catch {
+    // Ignore live Gmail failures during ask.
+  }
+
+  try {
+    const events = await fetchCalendarEvents(1);
+    if (events.length > 0) {
+      calendarContext = events
+        .slice(0, 4)
+        .map((event: CalendarEvent) => `- ${event.summary} | ${formatCalendarRange(event)}`)
+        .join('\n');
+    }
+  } catch {
+    // Ignore live calendar failures during ask.
+  }
+
+  const noteBlock = (relevantNotes.length > 0 ? relevantNotes : recentNotes)
+    .map(note => note.content)
+    .join('\n');
+
+  const notesForAnswer = relevantNotes.length > 0 ? relevantNotes : recentNotes;
+
+  const todoBlock = openTodos.length > 0
+    ? openTodos.map(todo => `- [${todo.priority}] ${todo.content}${todo.due_date ? ` (due ${todo.due_date})` : ''}`).join('\n')
+    : 'None';
+
+  const systemPrompt = getAskSystemPrompt();
+
+  const userPrompt = `Question:\n${question}\n\n${getContextPrompt()}## Open Todos\n${todoBlock}\n\n## Relevant Notes\n${noteBlock || 'None'}\n\n## Gmail\n${gmailContext || 'None'}\n\n## Calendar\n${calendarContext || 'None'}`;
+
+  const { url, model, apiType } = getActiveBackend();
+  try {
+    let response: Response;
+
+    if (apiType === 'ollama') {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          think: false,
+          stream: false,
+          options: {
+            temperature: 0.3,
+            num_predict: 420
+          }
+        }),
+        signal: AbortSignal.timeout(90000)
+      });
+    } else {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.3,
+          max_tokens: 420
+        }),
+        signal: AbortSignal.timeout(90000)
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Ask failed: ${response.status}`);
+    }
+
+    const data = await response.json() as { message?: { content?: string }; choices?: Array<{ message?: { content?: string } }> };
+    const answer = apiType === 'ollama'
+      ? data.message?.content?.trim()
+      : data.choices?.[0]?.message?.content?.trim();
+
+    if (!answer) {
+      console.log(buildAskFallback(question, notesForAnswer, openTodos));
+      return;
+    }
+
+    const jsonStr = answer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(jsonStr) as { summary?: string; confirmed?: string[]; possible?: string[]; next_actions?: string[] };
+    console.log(formatAskAnswer(parsed) || buildAskFallback(question, notesForAnswer, openTodos));
+  } catch {
+    console.log(buildAskFallback(question, notesForAnswer, openTodos));
   }
 }
 
@@ -574,10 +891,29 @@ async function cmdGoogle(args: string[]): Promise<void> {
       process.exit(1);
     }
     setupGoogleCredentials(credentialsPath);
+    if (process.stdin.isTTY && process.stdout.isTTY) {
+      const answer = await askQuestion('Open browser and sign in to Google now? [Y/n]: ');
+      if (!answer || answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
+        await authenticateGoogle();
+      }
+    }
     return;
   }
 
-  if (subcmd === 'auth') {
+  if (subcmd === 'auth' || subcmd === 'signin' || subcmd === 'login') {
+    const credentialsPath = args[1];
+    if (credentialsPath) {
+      setupGoogleCredentials(credentialsPath);
+    }
+
+    const status = getGoogleStatus();
+    if (!status.hasCredentials) {
+      console.error('Google OAuth client credentials are required before sign-in.');
+      console.error('Run: jot google login <path-to-oauth-client.json>');
+      console.error('Or:  jot google setup <path-to-oauth-client.json>');
+      process.exit(1);
+    }
+
     await authenticateGoogle();
     return;
   }
@@ -607,12 +943,20 @@ async function cmdGoogle(args: string[]): Promise<void> {
     console.log(`Calendar: ${status.config.calendar_enabled ? 'enabled' : 'disabled'}`);
     console.log(`Client file: ${status.config.credentials_path}`);
     console.log(`Token file: ${status.config.tokens_path}`);
+    if (!status.hasCredentials) {
+      console.log('\nNext step: jot google setup <path-to-oauth-client.json>');
+    } else if (!status.hasTokens) {
+      console.log('\nNext step: jot google signin');
+    } else if (!status.config.gmail_enabled || !status.config.calendar_enabled) {
+      console.log('\nNext step: enable services with `jot google gmail --enable` and/or `jot google calendar --enable`.');
+    }
     return;
   }
 
-  console.error('Usage: jot google [setup|auth|status|gmail|calendar]');
+  console.error('Usage: jot google [setup|auth|signin|login|status|gmail|calendar]');
   console.error('       jot google setup <path-to-oauth-client.json>');
-  console.error('       jot google auth');
+  console.error('       jot google signin');
+  console.error('       jot google login <path-to-oauth-client.json>');
   console.error('       jot google gmail --enable|--disable');
   console.error('       jot google calendar --enable|--disable');
   process.exit(1);
@@ -642,7 +986,7 @@ async function cmdContext(args: string[]): Promise<void> {
     }
 
     console.log(`\n=== Gmail (${emails.length}) ===`);
-    emails.forEach((email, index) => {
+    emails.forEach((email: GmailEmail, index: number) => {
       console.log(`\n${index + 1}. ${email.subject}`);
       console.log(`From: ${email.from}`);
       if (email.date) {
@@ -666,10 +1010,9 @@ async function cmdContext(args: string[]): Promise<void> {
     }
 
     console.log(`\n=== Calendar (${events.length}) ===`);
-    events.forEach((event, index) => {
+    events.forEach((event: CalendarEvent, index: number) => {
       console.log(`\n${index + 1}. ${event.summary}`);
-      console.log(`Start: ${event.start}`);
-      console.log(`End: ${event.end}`);
+      console.log(`When: ${formatCalendarRange(event)}`);
       if (event.location) {
         console.log(`Location: ${event.location}`);
       }
@@ -700,6 +1043,7 @@ Usage: jot <command> [options]
 
 Commands:
   jot note "content"           Add a new note
+  jot ask "question"           Ask Jot using notes and context
   jot edit <id> "content"      Edit a note
   jot delete <id> [--force]    Delete a note
   jot archive <id> [--unarchive]  Archive or restore a note
@@ -712,7 +1056,7 @@ Commands:
   jot process [--notify]       Background processing with notifications
   jot insights                 Deep corpus analysis (AI-powered)
   jot context [user|gmail|calendar]  View/inject context
-  jot google [setup|auth|status|gmail|calendar]  Google integration settings
+  jot google [setup|signin|status|gmail|calendar]  Google integration settings
   jot todo [add|list|done|delete|edit]  Manage todos
   jot export [--json|--markdown]  Export notes
   jot config [subcommand]      View or update config
@@ -733,12 +1077,14 @@ Search/List filters:
 
 Examples:
   jot note "meeting with advisor about project timeline"
+  jot ask "What should I focus on today?"
   jot edit a1b2c3d4 "updated content here"
   jot search "meeting" --tag research
   jot list --from 2024-01-01 --to 2024-12-31
   jot todo add "finish literature review" --due 2024-03-15 --priority high
   jot todo list --overdue
   jot context                   View learned context
+  jot google signin           Open browser Google sign-in
   jot google gmail --enable    Enable Gmail integration
   jot process --notify          Run with notifications
 
@@ -750,6 +1096,12 @@ Data location: ~/.jot/notes.db`);
 switch (cmd) {
   case 'note':
     cmdAdd(args).catch(err => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
+    break;
+  case 'ask':
+    cmdAsk(args).catch(err => {
       console.error('Error:', err.message);
       process.exit(1);
     });

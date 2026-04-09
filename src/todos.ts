@@ -20,7 +20,67 @@ function openTodoDB(): Database.Database {
 
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
+  migrateLegacyTodoRows(db);
   return db;
+}
+
+function normalizeLegacyTodoRow(row: { content: string; due_date: string | null; priority: string | null }): { content: string; due_date: string | null; priority: 'high' | 'medium' | 'low' } {
+  let content = row.content;
+  let dueDate = row.due_date;
+  let priority = (row.priority === 'high' || row.priority === 'low' || row.priority === 'medium' ? row.priority : 'medium') as 'high' | 'medium' | 'low';
+
+  const dueMatch = content.match(/(?:^|\s)--due\s+(\d{4}-\d{2}-\d{2})(?=\s|$)/);
+  if (dueMatch && !dueDate) {
+    dueDate = dueMatch[1];
+  }
+
+  const priorityMatch = content.match(/(?:^|\s)--priority\s+(high|medium|low)(?=\s|$)/);
+  if (priorityMatch) {
+    priority = priorityMatch[1] as 'high' | 'medium' | 'low';
+  }
+
+  if (/(^|\s)--high(?=\s|$)/.test(content)) {
+    priority = 'high';
+  } else if (/(^|\s)--low(?=\s|$)/.test(content)) {
+    priority = 'low';
+  } else if (/(^|\s)--medium(?=\s|$)/.test(content)) {
+    priority = 'medium';
+  }
+
+  content = content
+    .replace(/(?:^|\s)--due\s+\d{4}-\d{2}-\d{2}(?=\s|$)/g, ' ')
+    .replace(/(?:^|\s)--priority\s+(high|medium|low)(?=\s|$)/g, ' ')
+    .replace(/(?:^|\s)--(?:high|medium|low)(?=\s|$)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return { content, due_date: dueDate, priority };
+}
+
+function migrateLegacyTodoRows(db: Database.Database): void {
+  const rows = db.prepare(`
+    SELECT id, content, due_date, priority
+    FROM todos
+    WHERE content LIKE '%--priority %'
+       OR content LIKE '% --high%'
+       OR content LIKE '% --medium%'
+       OR content LIKE '% --low%'
+       OR content LIKE '%--due %'
+  `).all() as Array<{ id: string; content: string; due_date: string | null; priority: string | null }>;
+
+  if (rows.length === 0) {
+    return;
+  }
+
+  const update = db.prepare('UPDATE todos SET content = ?, due_date = ?, priority = ? WHERE id = ?');
+  const runMigration = db.transaction((items: Array<{ id: string; content: string; due_date: string | null; priority: string | null }>) => {
+    for (const row of items) {
+      const normalized = normalizeLegacyTodoRow(row);
+      update.run(normalized.content || row.content, normalized.due_date, normalized.priority, row.id);
+    }
+  });
+
+  runMigration(rows);
 }
 
 export interface Todo {

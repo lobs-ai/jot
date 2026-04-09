@@ -1,5 +1,6 @@
 import { openDB } from './db.js';
 import { getActiveBackend } from './config.js';
+import { getJotPersonaPrompt } from './prompting.js';
 
 export interface Insights {
   total_notes: number;
@@ -80,7 +81,7 @@ export async function generateDeepInsights(): Promise<{ research_threads: string
     .map(n => `[${n.id.slice(0,8)}] ${n.content}`)
     .join('\n---\n');
 
-  const systemPrompt = `You are a sharp, concise productivity analyst. Analyze notes and identify:
+  const systemPrompt = `${getJotPersonaPrompt()} Analyze notes and identify:
 
 1. research_threads: real themes/topics (1-3 words each, max 5)
 2. suggestions: specific, actionable things the user should actually do (max 5)
@@ -102,6 +103,7 @@ Be concrete. If notes are trivial/empty, say so. No generic advice.`;
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt }
           ],
+          think: false,
           stream: false,
           options: {
             temperature: 0.4,

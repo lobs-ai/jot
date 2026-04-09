@@ -416,7 +416,7 @@ export async function fetchGmailEmails(days: number = 3): Promise<GmailEmail[]> 
     return [];
   }
 
-  const query = encodeURIComponent(`newer_than:${Math.max(1, days)}d`);
+  const query = encodeURIComponent(`category:primary in:inbox newer_than:${Math.max(1, days)}d`);
   const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=${query}`;
   const messageList = await googleApiGet<{ messages?: Array<{ id: string; threadId?: string }> }>(listUrl);
   const messages = messageList.messages || [];

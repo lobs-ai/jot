@@ -99,6 +99,34 @@ npm link
 jot add "my first note"
 ```
 
+### Google setup
+
+If you want Gmail and Google Calendar integration, create a Google OAuth client JSON first:
+
+1. Go to `https://console.cloud.google.com/`
+2. Create or select a project
+3. Enable `Gmail API` and `Google Calendar API`
+4. Open `APIs & Services` -> `OAuth consent screen`
+5. Configure the consent screen
+6. Add yourself as a test user if the app is still in testing
+7. Open `APIs & Services` -> `Credentials`
+8. Click `Create Credentials` -> `OAuth client ID`
+9. Choose `Desktop app`
+10. Download the client JSON file
+
+Then connect Jot:
+
+```bash
+jot google login /path/to/oauth-client.json
+jot google gmail --enable
+jot google calendar --enable
+```
+
+Notes:
+- Use an OAuth client JSON, not a service account key
+- `Desktop app` is the correct client type for the CLI
+- If the consent screen is in testing, only listed test users can sign in
+
 **Requires:** Node.js 18+  
 **Backends:** [LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.ai/) running locally
 

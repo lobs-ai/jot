@@ -5,6 +5,7 @@ import { readContext, saveContext, updateContextFromNote, getContextPrompt, read
 import { getTodos, getOverdueTodos, getDueTodayTodos, createTodosFromActionItems, Todo } from './todos.js';
 import { createNotifier, shouldNotify, ProcessResult } from './notifier.js';
 import { fetchGmailEmails, fetchCalendarEvents, getGoogleConfig } from './google.js';
+import { generateInsights, generateDeepInsights, saveInsights } from './insights.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -101,6 +102,19 @@ export async function runAgentCycle(): Promise<ProcessResult> {
       if (note.analyzed && (note.projects.length > 0 || note.people.length > 0)) {
         updateContextFromNote(note.id, note.projects, note.people, note.action_items);
       }
+    }
+
+    if (allNotes.length > 0) {
+      log('Refreshing stored insights...');
+      const baseInsights = await generateInsights();
+      const deepInsights = await generateDeepInsights();
+      saveInsights({
+        ...baseInsights,
+        research_threads: deepInsights.research_threads,
+        suggestions: deepInsights.suggestions,
+        generated_at: new Date().toISOString()
+      });
+      log('Stored insights refreshed');
     }
 
     setLastSync();

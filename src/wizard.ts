@@ -1,5 +1,5 @@
 import * as readline from 'readline';
-import { saveConfig, loadConfig, Config, BackendConfig } from './config.js';
+import { saveConfig, loadConfig, Config, BackendConfig, UserProfile } from './config.js';
 
 function question(prompt: string): Promise<string> {
   const rl = readline.createInterface({
@@ -139,6 +139,24 @@ async function askAnalysisOptions(): Promise<{
   };
 }
 
+async function askUserProfile(existingName?: string): Promise<UserProfile> {
+  console.log('\nUser Profile:\n');
+  console.log('This helps Jot speak more naturally and avoid mixing you up with other people in your notes.\n');
+
+  const defaultName = existingName || '';
+  const name = await question(`Your name${defaultName ? ` [${defaultName}]` : ''}: `);
+  const bio = await question('Short profile (optional, e.g. "University of Michigan student studying CS and using Jot for school + life admin"): ');
+
+  clearLine();
+  clearLine();
+
+  return {
+    name: name || defaultName,
+    bio: bio || undefined,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'
+  };
+}
+
 async function askCompletion(): Promise<void> {
   console.log('\n=== Setup Complete! ===\n');
   console.log('Quick start:');
@@ -178,6 +196,7 @@ export async function runSetupWizard(): Promise<void> {
 
   const model = await askModelName(actualBackend, serverUrl);
   const analysisOptions = await askAnalysisOptions();
+  const profile = await askUserProfile(existingConfig.profile?.name);
 
   const lmstudioConfig: BackendConfig = {
     url: serverUrl,
@@ -204,7 +223,8 @@ export async function runSetupWizard(): Promise<void> {
       extractActionItems: analysisOptions.extractActionItems,
       linkRelatedNotes: analysisOptions.linkRelatedNotes,
       autoAnalyze: analysisOptions.autoAnalyze
-    }
+    },
+    profile
   };
 
   saveConfig(newConfig);
