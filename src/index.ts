@@ -11,6 +11,7 @@ import { setupGoogleCredentials, enableGoogleService, fetchGmailEmails, fetchCal
 import { insertTodo, getTodos, updateTodo, completeTodo, uncompleteTodo, deleteTodo, formatTodoList, Todo } from './todos.js';
 import { getAskSystemPrompt } from './prompting.js';
 import { loadSession, buildSessionContext, appendToSession, callModelWithSession, saveSession, markSurfaced, loadGlobalSurfaced, saveGlobalSurfaced, clearGlobalSurfaced } from './sessions.js';
+import { runUI } from './ui/index.js';
 import * as readline from 'readline';
 import * as child_process from 'child_process';
 import fs from 'fs';
@@ -1184,6 +1185,7 @@ Commands:
   jot config [subcommand]      View or update config
   jot migrate user-md          Migrate user.md to two-section format
   jot init [--wizard]         Initialize or reconfigure
+  jot ui                      Launch the terminal UI
 
 Todo filters:
   jot todo list [--all] [--overdue] [--today] [--high] [--low]
@@ -1344,6 +1346,9 @@ switch (cmd) {
       console.error('Error:', err.message);
       process.exit(1);
     });
+    break;
+  case 'ui':
+    runUI();
     break;
   default:
     console.error(`Unknown command: ${cmd}`);

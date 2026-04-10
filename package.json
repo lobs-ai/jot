@@ -20,11 +20,18 @@
     "prompt:test": "tsc && node dist/prompt-harness.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0"
+    "better-sqlite3": "^11.7.0",
+    "ink": "^4.4.1",
+    "react": "^18.2.0",
+    "ink-spinner": "^5.0.0",
+    "ink-select-input": "^5.0.0",
+    "ink-text-input": "^5.0.0",
+    "use-interval": "^1.4.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.10.5",
+    "@types/react": "^18.3.12",
     "typescript": "^5.7.3",
     "vitest": "^2.0.0",
     "@vitest/coverage-v8": "^2.0.0",
