@@ -80,6 +80,24 @@ export function App({ db, exitCallback }: AppProps) {
       exitCallback();
       return;
     }
+
+    if (key.upArrow) {
+      if (focusedPanel === 'notes') {
+        setNotesIndex(i => Math.max(0, i - 1));
+      } else if (focusedPanel === 'todos') {
+        setTodosIndex(i => Math.max(0, i - 1));
+      }
+      return;
+    }
+
+    if (key.downArrow) {
+      if (focusedPanel === 'notes') {
+        setNotesIndex(i => Math.min(notes.length - 1, i + 1));
+      } else if (focusedPanel === 'todos') {
+        setTodosIndex(i => Math.min(todos.length - 1, i + 1));
+      }
+      return;
+    }
   });
 
   const isFocused = (panel: FocusPanel) => focusedPanel === panel;
@@ -169,7 +187,7 @@ export function App({ db, exitCallback }: AppProps) {
 
       <Box borderStyle="single" borderTop paddingX={1}>
         <Text dimColor>
-          [<Text color="green">Tab</Text>] Panels | [<Text color="green">q</Text>] Quit
+          [<Text color="green">Tab</Text>] Panels | [<Text color="green">↑↓</Text>] Navigate | [<Text color="green">q</Text>] Quit
         </Text>
         <Box flexGrow={1} />
         <Text dimColor>Panel: </Text>
