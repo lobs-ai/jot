@@ -1159,68 +1159,60 @@ async function cmdContext(args: string[]): Promise<void> {
 const [cmd, ...args] = process.argv.slice(2);
 
 if (!cmd) {
-  console.log(`Jot - local AI note-taking CLI and mini-agent
+  console.log(`
+╔═══════════════════════════════════════════════════════════╗
+║                      Jot - Local AI Notes                   ║
+╚═══════════════════════════════════════════════════════════╝
 
-Usage: jot <command> [options]
+Quick Start:
+  jot ui                      Launch the terminal UI (recommended)
+  jot note "content"          Add a note
+  jot list                    List all notes
+  jot ask "question"          Ask about your notes
+  jot todo list               Show todos
+  jot chat                    Interactive chat
 
-Commands:
-  jot note "content"           Add a new note
-  jot ask "question"           Ask Jot using notes and context
-  jot chat                      Interactive chat REPL
-  jot edit <id> "content"      Edit a note
-  jot delete <id> [--force]    Delete a note
-  jot archive <id> [--unarchive]  Archive or restore a note
-  jot link <id1> <id2>         Link two notes
+All Commands:
+  jot note "content"          Add a new note
+  jot ask "question"          Ask Jot using notes and context
+  jot chat                    Interactive chat REPL
+  jot edit <id> "content"    Edit a note
+  jot delete <id>             Delete a note
+  jot archive <id>            Archive a note
+  jot link <id1> <id2>       Link two notes
   jot search "query"          Search notes
-  jot list                     List all notes
-  jot tags [tag]               List tags or filter by tag
-  jot summarize                Quick summary
-  jot analyze                 Run analysis on unanalyzed notes
-  jot process [--notify]       Background processing with notifications
-  jot insights                 Deep corpus analysis (AI-powered)
-  jot context [user|gmail|calendar]  View/inject context
-  jot google [setup|signin|status|gmail|calendar]  Google integration settings
-  jot todo [add|list|done|delete|edit]  Manage todos
-  jot export [--json|--markdown]  Export notes
-  jot config [subcommand]      View or update config
-  jot migrate user-md          Migrate user.md to two-section format
-  jot init [--wizard]         Initialize or reconfigure
-  jot ui                      Launch the terminal UI
+  jot list                    List all notes
+  jot tags [tag]             List tags or filter by tag
+  jot summarize               Quick summary
+  jot analyze                Run analysis on unanalyzed notes
+  jot process [--notify]      Background processing
+  jot insights                Deep corpus analysis
+  jot todo [subcommand]       Manage todos
+  jot export [--json]         Export notes
+  jot config                 View config
+  jot ui                     Launch terminal UI
 
-Todo filters:
-  jot todo list [--all] [--overdue] [--today] [--high] [--low]
-  jot todo add "task" [--due YYYY-MM-DD] [--priority high|medium|low]
-  jot todo done <id>           Mark todo complete
-  jot todo delete <id>          Delete todo
-  jot todo edit <id> "content" [--due YYYY-MM-DD] [--priority high|medium|low]
+Tip: Run 'jot ui' for the best experience!
+`);
 
-Search/List filters:
-  --tag/-t <tag>               Filter by tag
-  --from <YYYY-MM-DD>          Notes after date
-  --to <YYYY-MM-DD>            Notes before date
-  --archived                    Include archived notes
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
 
-Examples:
-  jot note "meeting with advisor about project timeline"
-  jot ask "What should I focus on today?"
-  jot chat --session work       Interactive chat REPL (named session)
-  jot edit a1b2c3d4 "updated content here"
-  jot search "meeting" --tag research
-  jot list --from 2024-01-01 --to 2024-12-31
-  jot todo add "finish literature review" --due 2024-03-15 --priority high
-  jot todo list --overdue
-  jot context                   View learned context
-  jot migrate user-md           Migrate to two-section user.md format
-  jot google signin           Open browser Google sign-in
-  jot google gmail --enable    Enable Gmail integration
-  jot process --notify          Run with notifications
-
-Config location: ~/.jot/config.json
-Data location: ~/.jot/notes.db`);
-  process.exit(0);
-}
-
-switch (cmd) {
+  rl.question('Press Enter to launch UI, or Ctrl+C to exit: ', (answer) => {
+    rl.close();
+    if (answer === '') {
+      runUI();
+    } else {
+      console.log('Goodbye!');
+      process.exit(0);
+    }
+  });
+} else if (cmd === 'ui' || cmd === 'tui') {
+  runUI();
+} else {
+  switch (cmd) {
   case 'note':
     cmdAdd(args).catch(err => {
       console.error('Error:', err.message);
@@ -1354,4 +1346,5 @@ switch (cmd) {
     console.error(`Unknown command: ${cmd}`);
     console.error('Run jot with no arguments for help.');
     process.exit(1);
+}
 }
